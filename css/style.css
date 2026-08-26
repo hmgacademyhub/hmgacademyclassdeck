@@ -442,6 +442,30 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
 }
 
 /* ==========================================================================
+   Improvement: Install Banner (Forced PWA Install)
+   Persistent bottom banner that encourages app installation.
+   ========================================================================== */
+.install-banner {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 9997;
+  background: linear-gradient(135deg, #1e2a78, #4f6ef7);
+  color: #fff; padding: 14px 18px; display: flex; align-items: center;
+  gap: 12px; box-shadow: 0 -4px 20px rgba(0,0,0,.4);
+  animation: slideUp .35s ease; font-size: 14px;
+}
+.install-banner .install-content { display: flex; align-items: center; gap: 14px; flex: 1; flex-wrap: wrap; }
+.install-banner .install-icon { font-size: 28px; }
+.install-banner .install-text { flex: 1; min-width: 160px; }
+.install-banner .install-text strong { display: block; font-size: 15px; }
+.install-banner .install-text span { font-size: 12px; opacity: .85; }
+.install-banner .install-actions { display: flex; gap: 8px; }
+.install-banner .install-close { background: none; border: none; color: #fff; font-size: 22px; cursor: pointer; opacity: .6; padding: 0 4px; }
+.install-banner .install-close:hover { opacity: 1; }
+@keyframes slideUp { from { transform: translateY(100%) } to { transform: translateY(0) } }
+
+/* Companion mode badge */
+.badge.companion { background: #0b8043; color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 999px; }
+
+/* ==========================================================================
    Enterprise tablet/mobile polish (2026)
    - wraps teacher controls into usable rows on tablets
    - keeps panes accessible in portrait

@@ -997,6 +997,7 @@ setQuality(Store.get("quality", "1280x720x8"));
 
 let lastComposite = 0;
 let _hbCounter = 0;
+/* v7: fix — prevent a null room from crashing the compositeLoop auth check */
 function compositeLoop(ts) {
   COMP.raf = requestAnimationFrame(compositeLoop);
   if (ts - lastComposite < 1000 / COMP.fps) return;
@@ -1695,10 +1696,15 @@ function addChatMsg(who, text, me) {
   list.scrollTop = list.scrollHeight;
   if (!me && !$("#drawerChat").classList.contains("open")) toast("💬 " + who + ": " + text.slice(0, 60), "", 4000);
 }
+/* Teacher chat with rate limiting: max 1 message per 400ms */
+let _teacherLastChat = 0;
 function sendTeacherChat() {
+  const now = Date.now();
+  if (now - _teacherLastChat < 400) { toast("Please slow down messages.", "", 2000); return; }
   const inp = $("#chatInput");
   const text = inp.value.trim();
   if (!text) return;
+  _teacherLastChat = now;
   inp.value = "";
   const priv = $("#chatPrivReply").checked && lastPrivatePeer;   /* v5 */
   if (priv && room) {
@@ -3706,7 +3712,8 @@ $("#btnBehaviorCSV").addEventListener("click", () => {
    v8.4 GROUP MAKER (ClassDojo/ClassIn style)
    ------------------------------------------------------------ */
 $("#btnGroups").addEventListener("click", () => {
-  if (!room || room.students.size < 2) { toast("Need at least 2 students online"); return; }
+  if (!room) { toast("Go live first (▶ Go Live)", "err"); return; }
+  if (room.students.size < 2) { toast("Need at least 2 students online to create groups", "err"); return; }
   const n = Math.min(room.students.size, Math.max(2, Number(prompt("How many groups?", "2")) || 2));
   const groups = room.makeGroups(n);
   const txt = groups.map((g, i) => "Group " + (i + 1) + ": " + g.join(", ")).join("\n");

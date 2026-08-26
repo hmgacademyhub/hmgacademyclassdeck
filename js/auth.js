@@ -25,7 +25,21 @@
    ============================================================ */
 "use strict";
 
-const AUTH_SECRET = "CHANGE-ME-HMG-2026";   /* ← set your own private phrase */
+const AUTH_SECRET = (() => {
+  /* ⚠️ CRITICAL: Change this value before deploying to production!
+     This secret is used to sign license keys. If you keep the default,
+     anyone who knows "CHANGE-ME-HMG-2026" can generate valid keys.
+     Instructions:
+       1. Open js/auth.js and js/security-config.js
+       2. Replace with a random 20+ character phrase
+       3. Update admin.html's gSecret field with the SAME phrase
+       4. Re-deploy to Vercel/Cloudflare Pages */
+  const secret = "CHANGE-ME-HMG-2026";
+  if (secret === "CHANGE-ME-HMG-2026" && !window.HMG_SECURITY?.licenseGateway) {
+    console.warn("⚠️ HMG ClassDeck: Using DEFAULT auth secret. Set a custom AUTH_SECRET in js/auth.js or configure the Cloudflare Worker license gateway before production deployment.");
+  }
+  return secret;
+})();
 const TRIAL_DAYS = 3;
 const HMG_SECURITY_CFG = window.HMG_SECURITY || {};
 const LICENSE_GATEWAY = String(HMG_SECURITY_CFG.licenseGateway || "").replace(/\/+$/, "");

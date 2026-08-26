@@ -383,10 +383,15 @@ function sFlyEmoji(emoji, name) {
 
 $("#sBtnChat").addEventListener("click", () => $("#sDrawerChat").classList.toggle("open"));
 $("#sChatClose").addEventListener("click", () => $("#sDrawerChat").classList.remove("open"));
+/* Chat rate limiting: max 1 message per 800ms to prevent spam */
+let _lastChatTs = 0;
 function sendChat() {
+  const now = Date.now();
+  if (now - _lastChatTs < 800) { toast("Please wait a moment before sending another message.", "", 2000); return; }
   const inp = $("#sChatInput");
   const text = inp.value.trim();
   if (!text) return;
+  _lastChatTs = now;
   inp.value = "";
   const priv = $("#sChatPriv").checked;       /* v5: private chat */
   sRoom.send({ t: "chat", text, private: priv });
