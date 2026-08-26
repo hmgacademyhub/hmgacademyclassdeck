@@ -1,7 +1,7 @@
 /* ============================================================
    HMG ACADEMY CLASS DECK v6 — Toolkit extensions
-   Adds 15+ interactive tools + an 161-card reference library
-   (toolkit-data.js) to the v5 Toolkit class = 100+ tools.
+   Adds 14 extension interactive tools + an 181-card reference library
+   (toolkit-data.js) to the v5 Toolkit class = 202 tool modes.
 
    Interactive tools:
      📐 construct  — geometry construction simulator (ruler,
@@ -18,7 +18,7 @@
      ⚖ balance    — algebra balance scales (solve x visually)
      🔢 hundred    — interactive hundred square (skip counting)
      🅰 letters    — letter & number formation tracing guides
-     📇 cards      — reference library browser (161 cards, search)
+     📇 cards      — reference library browser (181 cards, search)
    ============================================================ */
 "use strict";
 
@@ -842,7 +842,7 @@ Toolkit.prototype._drawLetters = function () {
 };
 
 /* ============================================================
-   📇 REFERENCE LIBRARY (161 cards from toolkit-data.js)
+   📇 REFERENCE LIBRARY (181 cards from toolkit-data.js)
    ============================================================ */
 Toolkit.prototype._cardsFiltered = function () {
   const cd = this._ext.cd;
@@ -895,6 +895,7 @@ Toolkit.prototype._tapCards = function (x) {
   const { W } = this._dims();
   const list = this._cardsFiltered();
   const cd = this._ext.cd;
+  if (!list.length) return;
   if (x > W / 2) cd.idx = (cd.idx + 1) % list.length;
   else cd.idx = (cd.idx - 1 + list.length) % list.length;
   this.draw();
@@ -939,6 +940,7 @@ Toolkit.prototype.stopNoise = function () {
     try { this._noise.stream.getTracks().forEach((t) => t.stop()); this._noise.ac.close(); } catch {}
     this._noise = null;
   }
+  this._noiseError = "";
 };
 Toolkit.prototype._drawNoise = function () {
   const ctx = this.ctx, { W, H } = this._dims();

@@ -432,7 +432,7 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
 /* v6 — professional polish */
 .topbar { box-shadow: 0 2px 14px rgba(0,0,0,.25); }
 .pane-head .tab { transition: background .15s, color .15s; }
-.card button.btn { margin-top: 4px; }
+.card .btn { margin-top: 4px; }
 
 /* v2 — landscape phones/tablets: tighter vertical chrome */
 @media (max-height: 480px) {

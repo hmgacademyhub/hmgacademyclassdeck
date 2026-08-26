@@ -12,6 +12,25 @@
 "use strict";
 
 const RTC_PREFIX = "hmg-classdeck-v1-";
+const RTC_HANDSHAKE_TIMEOUT = 15000;
+
+function safeBoardStrokes(raw, maxStrokes = 40) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(-maxStrokes).map((stroke) => {
+    if (!stroke || !Array.isArray(stroke.p)) return null;
+    const points = stroke.p.slice(0, 1200).map((point) => {
+      if (!Array.isArray(point) || point.length < 2) return null;
+      const x = Number(point[0]), y = Number(point[1]);
+      return Number.isFinite(x) && Number.isFinite(y)
+        ? [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))]
+        : null;
+    }).filter(Boolean);
+    if (!points.length) return null;
+    const color = /^#[0-9a-f]{3,8}$/i.test(String(stroke.c || "")) ? String(stroke.c) : "#111111";
+    const width = Number(stroke.w);
+    return { c: color, w: Number.isFinite(width) ? Math.max(1, Math.min(24, width)) : 3, p: points };
+  }).filter(Boolean);
+}
 
 const PEER_CONFIG = {
   // Public PeerJS cloud (free). Only brokers signalling; media is P2P.
@@ -59,21 +78,56 @@ class TeacherRoom {
     this.camCalls = new Map();                        // enterprise fix: close old teacher camera calls cleanly
     this.stats = { start: 0, peak: 0, joins: 0, chats: 0, polls: [], quizzes: [], reactions: 0, hands: 0, captions: 0 }; // analytics
     this._reconnectTimer = null;
+    this._startTimer = null;
+    this._ended = false;
   }
 
   start() {
     return new Promise((resolve, reject) => {
-      this.peer = new Peer(RTC_PREFIX + this.code + "-host", PEER_CONFIG);
-      this.peer.on("open", () => { this.stats.start = Date.now(); this._wire(); resolve(); });
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(this._startTimer);
+        this._startTimer = null;
+        fn(value);
+      };
+      const fail = (message) => finish(reject, new Error(message));
+      this._ended = false;
+      this._startTimer = setTimeout(() => {
+        fail("The classroom signalling service did not respond. Check your internet connection and try again.");
+      }, RTC_HANDSHAKE_TIMEOUT);
+      try {
+        this.peer = new Peer(RTC_PREFIX + this.code + "-host", PEER_CONFIG);
+      } catch (e) {
+        fail((e && e.message) || "Could not start the classroom engine.");
+        return;
+      }
+      this.peer.on("open", () => {
+        if (settled || this._ended) return;
+        try {
+          this.stats.start = Date.now();
+          this._wire();
+          finish(resolve);
+        } catch (e) {
+          fail((e && e.message) || "Could not initialise the classroom engine.");
+        }
+      });
       this.peer.on("error", (err) => {
-        if (err.type === "unavailable-id") reject(new Error("Room code already in use — generate a new one."));
-        else if (err.type === "peer-unavailable") { /* student left; ignore */ }
-        else this.onEvent("error", err);
+        if (err && err.type === "peer-unavailable") return; // a student may have left
+        if (!settled) {
+          this.onEvent("error", err);
+          if (err && err.type === "unavailable-id") fail("Room code already in use — generate a new one.");
+          else fail((err && err.message) || "The classroom signalling service returned an error.");
+        } else this.onEvent("error", err);
       });
       this.peer.on("disconnected", () => {
+        if (this._ended) return;
         this.onEvent("signal", { state: "reconnecting" });
         clearTimeout(this._reconnectTimer);
-        this._reconnectTimer = setTimeout(() => { try { this.peer.reconnect(); } catch {} }, 1500);
+        this._reconnectTimer = setTimeout(() => {
+          if (!this._ended) { try { this.peer.reconnect(); } catch {} }
+        }, 1500);
       });
     });
   }
@@ -119,18 +173,23 @@ class TeacherRoom {
     this.peer.on("call", (call) => {
       const kind = (call.metadata && call.metadata.kind) || "stucam";
       const stu = this.students.get(call.peer);
+      // Do not accept media from a peer that has not been admitted.
+      if (!stu) { try { call.close(); } catch {} return; }
+      // Mic permission is enforced on the teacher side; UI-only checks are not enough.
+      if (kind === "stumic" && !stu.micAllowed) { try { call.close(); } catch {} return; }
+      call._hmgKind = kind;
       call.answer(); // receive-only
       call.on("stream", (stream) => {
-        this.onEvent("student-media", { peerId: call.peer, name: stu ? stu.name : "Student", kind, stream });
+        this.onEvent("student-media", { peerId: call.peer, name: stu.name, kind, stream });
       });
       call.on("close", () => this.onEvent("student-media-end", { peerId: call.peer, kind }));
-      if (stu) stu.mediaCalls.push(call);
+      stu.mediaCalls.push(call);
     });
   }
 
   /* v4: admit a student (directly, or from the waiting room) */
   _admit(conn, name) {
-    this.students.set(conn.peer, { conn, name, joinedAt: Date.now(), hand: false, mediaCalls: [], score: 0 });
+    this.students.set(conn.peer, { conn, name, joinedAt: Date.now(), hand: false, micAllowed: false, mediaCalls: [], score: 0 });
     this.attendance.push({ name, event: "joined", time: nowStamp() });
     this.stats.joins++;
     this.stats.peak = Math.max(this.stats.peak, this.students.size);
@@ -145,7 +204,12 @@ class TeacherRoom {
   }
 
   /* v4: waiting-room controls */
-  setWaitingRoom(v) { this.waitingRoom = v; }
+  setWaitingRoom(v) {
+    const wasOn = this.waitingRoom;
+    this.waitingRoom = !!v;
+    // Turning the lobby off must not strand people who are already waiting.
+    if (wasOn && !this.waitingRoom) this.admitAll();
+  }
   admit(peerId) {
     const p = this.pending.get(peerId);
     if (!p) return;
@@ -164,7 +228,11 @@ class TeacherRoom {
 
   /* v4: Zoom/Meet-style extras */
   muteAllStudents() {
-    for (const [pid, stu] of this.students) {
+    for (const [, stu] of this.students) {
+      stu.micAllowed = false;
+      for (const call of stu.mediaCalls.filter((c) => c._hmgKind === "stumic")) {
+        try { call.close(); } catch {}
+      }
       try { stu.conn.send({ t: "micAllow", on: false }); } catch {}
     }
   }
@@ -192,9 +260,10 @@ class TeacherRoom {
         const q = this.activeQuiz;
         if (!q || q.answered.has(conn.peer)) break;
         const qi = q.index;
-        if (Number(d.qIndex) !== qi) break;
+        const answer = Number(d.answer);
+        if (Number(d.qIndex) !== qi || !Number.isInteger(answer) || answer < 0 || answer >= q.def.questions[qi].options.length) break;
         q.answered.add(conn.peer);
-        const correct = Number(d.answer) === q.def.questions[qi].correct;
+        const correct = answer === q.def.questions[qi].correct;
         if (correct) {
           // speed bonus: full 100 if instant, decays to 50 over the time limit
           const elapsed = (Date.now() - q.askedAt) / 1000;
@@ -203,7 +272,7 @@ class TeacherRoom {
           stu.score = (stu.score || 0) + pts;
           q.scores.set(conn.peer, (q.scores.get(conn.peer) || 0) + pts);
         }
-        q.tally[qi][Number(d.answer)] = (q.tally[qi][Number(d.answer)] || 0) + 1;
+        q.tally[qi][answer] = (q.tally[qi][answer] || 0) + 1;
         conn.send({ t: "quizFeedback", correct, correctIndex: q.def.questions[qi].correct,
                     explanation: q.def.questions[qi].explanation || "" });   /* v6 */
         this.onEvent("quiz-progress", this.quizProgress());
@@ -237,20 +306,32 @@ class TeacherRoom {
         break;
       case "boardStrokes": {   /* v8: student whiteboard sync */
         if (!this.boardsOn) break;
+        const strokes = safeBoardStrokes(d.strokes);
         this.onEvent("board-strokes", { peerId: conn.peer, name: stu.name,
-          strokes: d.strokes, full: !!d.full });
+          strokes, full: !!d.full });
         break;
       }
       case "activityResp": {   /* v8: activity answer */
         if (!this.activity) break;
-        this.activity.responses.set(conn.peer, { name: stu.name, resp: d.resp, at: Date.now() });
-        this.onEvent("activity-resp", { name: stu.name, resp: d.resp, count: this.activity.responses.size });
+        let resp = d.resp;
+        if (typeof resp === "string") resp = resp.slice(0, 280);
+        else if (resp && typeof resp === "object") resp = {
+          rating: Math.max(1, Math.min(5, Number(resp.rating) || 3)),
+          learned: String(resp.learned || "").slice(0, 280),
+          confusing: String(resp.confusing || "").slice(0, 280)
+        };
+        else resp = String(resp || "").slice(0, 280);
+        this.activity.responses.set(conn.peer, { name: stu.name, resp, at: Date.now() });
+        this.onEvent("activity-resp", { name: stu.name, resp, count: this.activity.responses.size });
         break;
       }
     }
   }
 
   _dropStudent(peerId) {
+    // During an intentional end keep the final roster/leaderboard available
+    // for exports until the page is reloaded.
+    if (this._ended) return;
     const stu = this.students.get(peerId);
     if (!stu) return;
     /* v5 bug-fix: close lingering media calls (was a memory/connection leak) */
@@ -332,35 +413,54 @@ class TeacherRoom {
   }
   allowMic(peerId, on) {
     const stu = this.students.get(peerId);
-    if (stu) try { stu.conn.send({ t: "micAllow", on }); } catch {}
+    if (!stu) return;
+    stu.micAllowed = !!on;
+    if (!stu.micAllowed) {
+      for (const call of stu.mediaCalls.filter((c) => c._hmgKind === "stumic")) {
+        try { call.close(); } catch {}
+      }
+    }
+    try { stu.conn.send({ t: "micAllow", on: !!on }); } catch {}
   }
-  sendAnnouncement(text) { this.broadcast({ t: "announce", text }); }
+  sendAnnouncement(text) {
+    const clean = String(text || "").trim().slice(0, 500);
+    if (clean) this.broadcast({ t: "announce", text: clean });
+  }
   sendCaption(text, final) {
     const clean = String(text || "").slice(0, 500);
     if (!clean) return;
     this.stats.captions++;
     this.broadcast({ t: "caption", text: clean, final: !!final, time: nowStamp() });
   }
-  sendChat(text) { this.broadcast({ t: "chat", from: "Teacher", text }); }
+  sendChat(text) {
+    const clean = String(text || "").slice(0, 1000);
+    if (clean) this.broadcast({ t: "chat", from: "Teacher", text: clean });
+  }
   sendChatTo(peerId, text) {   /* v5: private teacher → one student */
     const stu = this.students.get(peerId);
-    if (stu) try { stu.conn.send({ t: "chat", from: "Teacher (private)", text, private: true }); } catch {}
+    const clean = String(text || "").slice(0, 1000);
+    if (stu && clean) try { stu.conn.send({ t: "chat", from: "Teacher (private)", text: clean, private: true }); } catch {}
   }
 
   /* ----- polls ----- */
   startPoll(question, options) {
+    const cleanOptions = Array.isArray(options) ? options.map((x) => String(x).trim().slice(0, 200)).filter(Boolean).slice(0, 6) : [];
+    const cleanQuestion = String(question || "").trim().slice(0, 500);
+    if (!cleanQuestion || cleanOptions.length < 2) return false;
     this.activePoll = {
-      def: { question, options },
-      counts: options.map(() => 0),
+      def: { question: cleanQuestion, options: cleanOptions },
+      counts: cleanOptions.map(() => 0),
       voted: new Set()
     };
     this.broadcast({ t: "poll", poll: this.activePoll.def });
     this.onEvent("poll-update", this.pollResults());
+    return true;
   }
   endPoll() {
     if (!this.activePoll) return null;
     const res = this.pollResults();
     this.broadcast({ t: "pollEnd", results: res });
+    this.stats.polls.push({ question: res.question, counts: res.counts.slice(), time: nowStamp() });
     this.activePoll = null;
     return res;
   }
@@ -384,9 +484,13 @@ class TeacherRoom {
 
   /* ----- v8: activities (open question / word cloud / exit ticket) ----- */
   startActivity(def) {
-    // def = { kind: "open"|"cloud"|"exit", prompt }
-    this.activity = { def, responses: new Map() };
-    this.broadcast({ t: "activity", def });
+    // def = { kind: "open"|"cloud"|"board"|"exit", prompt }
+    const allowed = ["open", "cloud", "board", "exit"];
+    const clean = { kind: allowed.includes(def && def.kind) ? def.kind : "open", prompt: String(def && def.prompt || "").trim().slice(0, 500) };
+    if (!clean.prompt) return false;
+    this.activity = { def: clean, responses: new Map() };
+    this.broadcast({ t: "activity", def: clean });
+    return true;
   }
   endActivity(showResults) {
     if (!this.activity) return null;
@@ -422,6 +526,7 @@ class TeacherRoom {
   /* ----- v8: group maker ----- */
   makeGroups(n) {
     const ids = [...this.students.keys()];
+    n = Math.max(1, Math.min(ids.length || 1, Math.floor(Number(n) || 1)));
     for (let i = ids.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]];
     }
@@ -447,13 +552,22 @@ class TeacherRoom {
   }
   startQuiz(def) {
     // def = { title, secondsPerQ, questions: [{q, options[], correct}] }
+    if (!def || !Array.isArray(def.questions) || !def.questions.length || def.questions.length > 100) return false;
+    const questions = def.questions.map((q) => ({
+      q: String(q && q.q || "").slice(0, 500),
+      options: Array.isArray(q && q.options) ? q.options.map((o) => String(o).slice(0, 200)).slice(0, 6) : [],
+      correct: Number(q && q.correct), explanation: String(q && q.explanation || "").slice(0, 500)
+    })).filter((q) => q.q && q.options.length >= 2 && Number.isInteger(q.correct) && q.correct >= 0 && q.correct < q.options.length);
+    if (!questions.length) return false;
+    const cleanDef = { title: String(def.title || "Quick quiz").slice(0, 120), secondsPerQ: Math.max(5, Math.min(600, Number(def.secondsPerQ) || 30)), questions };
     this.activeQuiz = {
-      def, index: 0, askedAt: Date.now(),
+      def: cleanDef, index: 0, askedAt: Date.now(),
       answered: new Set(), scores: new Map(),
-      tally: def.questions.map(() => ({}))
+      tally: questions.map(() => ({}))
     };
     this.broadcast({ t: "quiz", quiz: this._quizPublicDef() });
     this.onEvent("quiz-progress", this.quizProgress());
+    return true;
   }
   nextQuizQuestion() {
     const q = this.activeQuiz;
@@ -498,6 +612,13 @@ class TeacherRoom {
   }
 
   end() {
+    if (this._ended) return;
+    this._ended = true;
+    for (const stu of this.students.values()) this.attendance.push({ name: stu.name, event: "left", time: nowStamp() });
+    clearTimeout(this._reconnectTimer);
+    clearTimeout(this._startTimer);
+    this._reconnectTimer = null;
+    this._startTimer = null;
     this.broadcast({ t: "classEnded" });
     for (const [, p] of this.pending) {
       try { p.conn.send({ t: "classEnded" }); } catch {}
@@ -530,33 +651,73 @@ class StudentRoom {
     this.camCall = null;
     this.micCall = null;
     this._closedByUs = false;
+    this._joinSettled = false;
+    this._joinResolve = null;
+    this._joinReject = null;
+    this._joinTimer = null;
+  }
+
+  _settleJoin(state) {
+    if (this._joinSettled) return;
+    this._joinSettled = true;
+    clearTimeout(this._joinTimer);
+    this._joinTimer = null;
+    const resolve = this._joinResolve;
+    this._joinResolve = null;
+    this._joinReject = null;
+    if (resolve) resolve({ state });
+  }
+  _failJoin(message, retryable = true) {
+    if (this._joinSettled) return;
+    this._joinSettled = true;
+    clearTimeout(this._joinTimer);
+    this._joinTimer = null;
+    const err = new Error(message);
+    err.retryable = retryable;
+    const reject = this._joinReject;
+    this._joinResolve = null;
+    this._joinReject = null;
+    if (reject) reject(err);
   }
 
   join() {
+    this._closedByUs = false;
+    this._joinSettled = false;
     return new Promise((resolve, reject) => {
-      this.peer = new Peer(PEER_CONFIG);
-      let settled = false;
+      this._joinResolve = resolve;
+      this._joinReject = reject;
+      this._joinTimer = setTimeout(() => {
+        this._failJoin("Could not reach the class. Check the room code and that the teacher is live.", true);
+      }, RTC_HANDSHAKE_TIMEOUT);
+      try { this.peer = new Peer(PEER_CONFIG); }
+      catch (e) { this._failJoin((e && e.message) || "Could not start the classroom engine.", true); return; }
       this.peer.on("open", () => {
-        this.conn = this.peer.connect(RTC_PREFIX + this.code + "-host", {
-          reliable: true,
-          serialization: "json",
-          metadata: { name: this.name, pin: this.pin, tok: this.tok, rejoin: Store.get("joined_" + this.code, false) }
-        });
-        const failT = setTimeout(() => {
-          if (!settled) { settled = true; reject(new Error("Could not reach the class. Check the room code and that the teacher is live.")); }
-        }, 15000);
-        this.conn.on("open", () => { clearTimeout(failT); if (!settled) { settled = true; resolve(); } });
+        if (this._closedByUs) return;
+        try {
+          this.conn = this.peer.connect(RTC_PREFIX + this.code + "-host", {
+            reliable: true,
+            serialization: "json",
+            metadata: { name: this.name, pin: this.pin, tok: this.tok, rejoin: Store.get("joined_" + this.code, false) }
+          });
+        } catch (e) {
+          this._failJoin((e && e.message) || "Could not connect to the teacher.", true);
+          return;
+        }
+        this.conn.on("open", () => {}); // admission/welcome is the real handshake
         this.conn.on("data", (d) => this._onData(d));
         this.conn.on("error", (err) => {
-          clearTimeout(failT);
-          if (!settled) { settled = true; reject(new Error((err && err.message) || "Could not connect to the teacher.")); }
+          if (!this._joinSettled) this._failJoin((err && err.message) || "Could not connect to the teacher.", true);
         });
-        this.conn.on("close", () => { if (!this._closedByUs) this.onEvent("disconnected"); });
+        this.conn.on("close", () => {
+          if (this._closedByUs) return;
+          if (!this._joinSettled) this._failJoin("The connection to the teacher closed before admission.", true);
+          else this.onEvent("disconnected");
+        });
       });
       this.peer.on("error", (err) => {
-        if (err.type === "peer-unavailable" && !settled) {
-          settled = true; reject(new Error("Class not found. The teacher may not be live yet."));
-        }
+        if (this._closedByUs) return;
+        if (err && err.type === "peer-unavailable") this._failJoin("Class not found. The teacher may not be live yet.", true);
+        else if (!this._joinSettled) this._failJoin((err && err.message) || "Could not connect to the classroom service.", true);
       });
       // teacher calls us with stage / teacher cam
       this.peer.on("call", (call) => {
@@ -571,7 +732,7 @@ class StudentRoom {
   _onData(d) {
     if (!d || typeof d !== "object") return;
     switch (d.t) {
-      case "welcome":   this.onEvent("welcome", d); break;
+      case "welcome":   this._settleJoin("admitted"); this.onEvent("welcome", d); break;
       case "chat":      this.onEvent("chat", d); break;
       case "caption":   this.onEvent("caption", d); break;       // enterprise accessibility captions
       case "announce":  this.onEvent("announce", d); break;
@@ -586,10 +747,10 @@ class StudentRoom {
       case "micAllow":  this.onEvent("micAllow", d); break;
       case "teachercam-off": this.onEvent("media-end", { kind: "teachercam" }); break;
       case "kicked":    this.onEvent("kicked"); break;
-      case "rejected":  this.onEvent("rejected", d); break;
+      case "rejected":  this._failJoin(d.reason || "The teacher rejected this join request.", false); this.onEvent("rejected", d); break;
       case "classEnded":this.onEvent("classEnded"); break;
-      case "waiting":   this.onEvent("waiting"); break;            // v4
-      case "admitted":  this.onEvent("admitted"); break;           // v4
+      case "waiting":   this._settleJoin("waiting"); this.onEvent("waiting"); break;            // v4
+      case "admitted":  this._settleJoin("admitted"); this.onEvent("admitted"); break;           // v4
       case "reaction":  this.onEvent("reaction", d); break;        // v4
       case "spotlight": this.onEvent("spotlight", d); break;       // v4
       case "boards":    this.onEvent("boards", d); break;            // v8
@@ -617,6 +778,7 @@ class StudentRoom {
       if (this._camStream) { this._camStream.getTracks().forEach((t) => t.stop()); this._camStream = null; }
       return null;
     }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !this.peer || !this.conn) throw new Error("Camera sharing is unavailable until you are connected to the class.");
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 480 }, frameRate: { ideal: 12 } }, audio: false
     });
@@ -632,7 +794,7 @@ class StudentRoom {
       if (this._screenStream) { this._screenStream.getTracks().forEach((t) => t.stop()); this._screenStream = null; }
       return null;
     }
-    if (!navigator.mediaDevices.getDisplayMedia) throw new Error("Screen sharing is not supported on this browser.");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || !this.peer || !this.conn) throw new Error("Screen sharing is unavailable until you are connected to the class.");
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: 8 } }, audio: false
     });
@@ -651,6 +813,7 @@ class StudentRoom {
       if (this._micStream) { this._micStream.getTracks().forEach((t) => t.stop()); this._micStream = null; }
       return;
     }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !this.peer || !this.conn) throw new Error("Microphone sharing is unavailable until you are connected to the class.");
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     this._micStream = stream;
     this.micCall = this.peer.call(RTC_PREFIX + this.code + "-host", stream, { metadata: { kind: "stumic" } });
@@ -658,6 +821,9 @@ class StudentRoom {
 
   leave() {
     this._closedByUs = true;
+    this._failJoin("Connection closed.", false);
+    clearTimeout(this._joinTimer);
+    this._joinTimer = null;
     try { this.shareCamera(false); } catch {}
     try { this.shareMic(false); } catch {}
     try { this.shareScreen(false); } catch {}

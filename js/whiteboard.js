@@ -29,7 +29,8 @@ class Whiteboard {
     this.fillShapes = false;                        // v4: filled vs outlined shapes
     this._pointers = new Map();                     // v4: active pointers for pinch detection
     this._pinch = null;
-    this.pages = (this.persist && Store.get(this.persistKey, null)) || [this._newPage()];
+    const savedPages = this.persist ? Store.get(this.persistKey, null) : null;
+    this.pages = this._normalisePages(savedPages) || [this._newPage()];
     this.pageIndex = 0;
     this._lasers = [];                               // v2: fading laser strokes
     this._laserRaf = null;
@@ -44,7 +45,39 @@ class Whiteboard {
   }
 
   _newPage() { return { strokes: [] }; }
-  get page() { return this.pages[this.pageIndex]; }
+  _normalisePages(value) {
+    if (!Array.isArray(value) || !value.length) return null;
+    const tools = new Set(["pen", "highlight", "eraser", "line", "arrow", "rect", "ellipse", "triangle", "diamond", "star", "text", "laser", "image"]);
+    const pages = value.slice(0, 200).map((page) => {
+      if (!page || typeof page !== "object") return null;
+      const strokes = Array.isArray(page.strokes) ? page.strokes.slice(0, 5000).map((stroke) => {
+        if (!stroke || typeof stroke !== "object" || !tools.has(stroke.tool) || !Array.isArray(stroke.pts)) return null;
+        const pts = stroke.pts.slice(0, 1200).map((point) => {
+          if (!point || typeof point !== "object") return null;
+          const x = Number(point.x), y = Number(point.y);
+          return Number.isFinite(x) && Number.isFinite(y)
+            ? { x: Math.max(-2, Math.min(3, x)), y: Math.max(-2, Math.min(3, y)) }
+            : null;
+        }).filter(Boolean);
+        if (!pts.length) return null;
+        const color = /^#[0-9a-f]{3,8}$/i.test(String(stroke.color || "")) ? String(stroke.color) : "#111111";
+        const size = Number(stroke.size);
+        const out = { tool: stroke.tool, color, size: Number.isFinite(size) ? Math.max(1, Math.min(80, size)) : 3, pts };
+        if (stroke.fill) out.fill = true;
+        if (stroke.tool === "text") out.text = String(stroke.text || "").slice(0, 1000);
+        if (stroke.tool === "image") {
+          const data = String(stroke.data || "");
+          const w = Number(stroke.w), h = Number(stroke.h);
+          if (!/^data:image\//i.test(data) || data.length > 2_000_000 || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+          out.data = data; out.w = Math.max(0.01, Math.min(3, w)); out.h = Math.max(0.01, Math.min(3, h));
+        }
+        return out;
+      }).filter(Boolean) : [];
+      return { strokes };
+    }).filter(Boolean);
+    return pages.length ? pages : null;
+  }
+  get page() { return this.pages[this.pageIndex] || this.pages[0]; }
 
   /* ---------- sizing ---------- */
   _observeResize() {
@@ -379,8 +412,8 @@ class Whiteboard {
 
   /* ---------- public API ---------- */
   setTool(t)  { this.tool = t; }
-  setColor(c) { this.color = c; }
-  setSize(s)  { this.size = s; }
+  setColor(c) { this.color = /^#[0-9a-f]{3,8}$/i.test(String(c)) ? String(c) : "#111111"; }
+  setSize(s)  { this.size = Math.max(1, Math.min(80, Number(s) || 3)); }
   setBackground(style) { this.bgStyle = style; Store.set("wb_bg", style); this.redraw(); this.onChange(); }
 
   undo() {
@@ -414,13 +447,14 @@ class Whiteboard {
     this.redoStack.length = 0;
     this.redraw(); this._save(); this.onChange();
   }
-  addPage()  { this.pages.push(this._newPage()); this.gotoPage(this.pages.length - 1); }
+  addPage()  { this.undoStack.length = 0; this.redoStack.length = 0; this.pages.push(this._newPage()); this.gotoPage(this.pages.length - 1); this._save(); }
   gotoPage(i) {
     this.pageIndex = Math.max(0, Math.min(this.pages.length - 1, i));
     this.redraw(); this.onChange();
   }
   deletePage() {
     if (this.pages.length <= 1) { this.clearPage(); return; }
+    this.undoStack.length = 0; this.redoStack.length = 0;
     this.pages.splice(this.pageIndex, 1);
     this.gotoPage(Math.min(this.pageIndex, this.pages.length - 1));
     this._save();
@@ -429,7 +463,8 @@ class Whiteboard {
     const keep = { ...this.view };
     this.view = { s: 1, x: 0, y: 0 }; this.redraw();
     this.canvas.toBlob((b) => {
-      downloadBlob(b, `whiteboard-page${this.pageIndex + 1}-${Date.now()}.png`);
+      if (b) downloadBlob(b, `whiteboard-page${this.pageIndex + 1}-${Date.now()}.png`);
+      else toast("Could not export this board as an image", "err");
       this.view = keep; this.redraw();
     });
   }
@@ -501,8 +536,11 @@ class Whiteboard {
   }
   importJSON(json) {
     try {
-      const pages = JSON.parse(json);
-      if (Array.isArray(pages)) { this.pages = pages; this.gotoPage(0); this._save(); }
+      const pages = this._normalisePages(JSON.parse(json));
+      if (!pages) throw new Error("empty or malformed board");
+      this.pages = pages;
+      this.undoStack.length = 0; this.redoStack.length = 0;
+      this.gotoPage(0); this._save();
     } catch { toast("Invalid whiteboard file", "err"); }
   }
   _save() {

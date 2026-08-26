@@ -12,15 +12,17 @@ let myCamOn = false, myMicOn = false, micAllowed = false;
 let stageEntered = false;
 
 const qs = new URLSearchParams(location.search);
-if (qs.get("room")) {
+function normaliseRoomCode(value) { return String(value || "").trim().toUpperCase(); }
+const invitedRoom = normaliseRoomCode(qs.get("room"));
+if (invitedRoom) {
   /* v6 (issue 1): class links take students STRAIGHT to the studio —
      the room is pre-filled and hidden; they only type their name and join.
      Admission then depends on the teacher's approval (waiting room). */
-  $("#inRoom").value = qs.get("room").toUpperCase();
+  $("#inRoom").value = invitedRoom;
   const wrap = $("#roomFieldWrap");
   if (wrap) wrap.classList.add("hide");
   const chip = $("#roomChip");
-  if (chip) { chip.textContent = "Class: " + qs.get("room").toUpperCase(); chip.classList.remove("hide"); }
+  if (chip) { chip.textContent = "Class: " + invitedRoom; chip.classList.remove("hide"); }
 }
 $("#inName").value = Store.get("stuname", "");
 setTimeout(() => { try { $("#inName").focus(); } catch {} }, 300);
@@ -68,56 +70,111 @@ $("#btnJoin").addEventListener("click", () => { lobbyOn ? stopLobby() : join(); 
 $("#inName").addEventListener("keydown", (e) => { if (e.key === "Enter" && !lobbyOn) join(); });
 
 async function join() {
-  const code = $("#inRoom").value.trim().toUpperCase();
+  const code = normaliseRoomCode($("#inRoom").value);
   const name = $("#inName").value.trim();
-  if (code.length < 4) { $("#joinStatus").textContent = "Enter the room code your teacher shared."; return; }
+  if (!/^[A-Z0-9]{4,10}$/.test(code)) {
+    $("#joinStatus").textContent = "Enter the 4–10 character room code your teacher shared.";
+    return;
+  }
   if (!name) { $("#joinStatus").textContent = "Please enter your name."; return; }
   Store.set("stuname", name);
+  rejoinTries = 0;
+  hideRejoinBanner();
+  clearTimeout(lobbyTimer);
+  lobbyOn = false;
 
   $("#btnJoin").disabled = true;
   $("#joinStatus").textContent = "Connecting to class…";
 
   sRoom = new StudentRoom(code, name, { onEvent: onEvent, pin: $("#inPin").value.trim(), tok: qs.get("tok") || "" });
   try {
-    await sRoom.join();
-    $("#joinStatus").textContent = "Connected — waiting for the teacher…";
+    const result = await sRoom.join();
+    if (result && result.state === "waiting") {
+      showWaitingState(code, name);
+    } else {
+      $("#joinStatus").textContent = "Connected — waiting for the teacher's screen…";
+    }
   } catch (e) {
-    /* v5 (issue 2): LOBBY — if the class is not live yet, wait politely and
-       keep retrying until the teacher goes live. No more "join failed". */
-    try { sRoom.leave(); } catch {}
-    startLobby(code, name, e.message);
+    /* A missing room is retryable; a wrong PIN/token is a deterministic error
+       and must not send the student into an endless retry loop. */
+    try { sRoom && sRoom.leave(); } catch {}
+    sRoom = null;
+    if (e && e.retryable === false) {
+      restoreJoinButton();
+      $("#joinStatus").textContent = e.message || "The teacher rejected this join request.";
+      return;
+    }
+    startLobby(code, name, e && e.message);
   }
 }
 
 /* ---------- v5: lobby (auto-join when teacher goes live) ---------- */
 let lobbyTimer = null, lobbyOn = false;
+function showWaitingState(code, name) {
+  lobbyOn = true;
+  clearTimeout(lobbyTimer);
+  $("#joinStatus").textContent = "You're in the waiting room — the teacher will admit you shortly.";
+  $("#btnJoin").textContent = "✕ Leave waiting room";
+  $("#btnJoin").disabled = false;
+  window._wantWake = true; keepAwake(true);
+  // The modal is also opened by the room event; this keeps UI state correct if
+  // the transport resolves before the event loop paints it.
+  $("#joinGate").classList.add("hide");
+  openModal("#mWaiting");
+}
 function startLobby(code, name, why) {
   lobbyOn = true;
-  $("#joinStatus").innerHTML = "🕐 <b>You're in the lobby.</b> " +
-    (why && why.includes("PIN") ? escapeHtml(why) :
+  clearTimeout(lobbyTimer);
+  closeModal("#mWaiting");
+  $("#joinGate").classList.remove("hide");
+  $("#joinStatus").textContent = "🕐 You're in the lobby. " +
+    (why && /PIN|secure invite|rejected/i.test(why) ? why :
     "The class hasn't started yet — this page will join you automatically the moment your teacher goes live. Keep it open.");
   $("#btnJoin").textContent = "✕ Stop waiting";
   $("#btnJoin").disabled = false;
   window._wantWake = true; keepAwake(true);
-  const tick = async () => {
+  // A successful transport handshake that reports "waiting" is a real
+  // waiting room, not a reason to keep opening new PeerJS connections.
+  lobbyTimer = setTimeout(async function tick() {
     if (!lobbyOn) return;
-    sRoom = new StudentRoom(code, name, { onEvent: onEvent, pin: $("#inPin").value.trim(), tok: qs.get("tok") || "" });
+    const candidate = new StudentRoom(code, name, { onEvent: onEvent, pin: $("#inPin").value.trim(), tok: qs.get("tok") || "" });
+    sRoom = candidate;
     try {
-      await sRoom.join();
+      const result = await candidate.join();
+      if (!lobbyOn) { candidate.leave(); return; }
+      if (result && result.state === "waiting") {
+        showWaitingState(code, name);
+        return;
+      }
       lobbyOn = false;
       restoreJoinButton();
       toast("🎉 Your teacher is live — joining now!", "ok");
+      // The welcome event normally enters the stage; this is a safe fallback.
       enterStage();
-    } catch {
-      try { sRoom.leave(); } catch {}
+    } catch (e) {
+      try { candidate.leave(); } catch {}
+      if (!lobbyOn) return;
+      if (e && e.retryable === false) {
+        lobbyOn = false;
+        restoreJoinButton();
+        closeModal("#mWaiting");
+        $("#joinGate").classList.remove("hide");
+        $("#joinStatus").textContent = e.message || "The teacher rejected this join request.";
+        return;
+      }
       lobbyTimer = setTimeout(tick, 8000);   // retry every 8 s
     }
-  };
-  lobbyTimer = setTimeout(tick, 4000);
+  }, 4000);
 }
 function stopLobby() {
   lobbyOn = false;
   clearTimeout(lobbyTimer);
+  lobbyTimer = null;
+  const oldRoom = sRoom;
+  sRoom = null;
+  try { oldRoom && oldRoom.leave(); } catch {}
+  closeModal("#mWaiting");
+  $("#joinGate").classList.remove("hide");
   restoreJoinButton();
   $("#joinStatus").textContent = "Stopped waiting. Tap Join class to try again.";
   window._wantWake = false; keepAwake(false);
@@ -126,6 +183,7 @@ function restoreJoinButton() {
   $("#btnJoin").textContent = "Join class ➜";
   $("#btnJoin").disabled = false;
 }
+$("#btnLeaveWaiting")?.addEventListener("click", stopLobby);
 
 function enterStage() {
   if (stageEntered) return;
@@ -138,7 +196,7 @@ function enterStage() {
   scheduleControlsHide();
   // try fullscreen for the "laptop look"
   setTimeout(() => {
-    document.documentElement.requestFullscreen().catch(() => {});
+    if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
   }, 400);
 }
 
@@ -146,7 +204,12 @@ function enterStage() {
 function onEvent(type, p) {
   switch (type) {
     case "welcome":
-      Store.set("joined_" + (sRoom ? sRoom.code : $("#inRoom").value.trim().toUpperCase()), true);
+      lobbyOn = false;
+      clearTimeout(lobbyTimer);
+      lobbyTimer = null;
+      rejoinTries = 0;
+      restoreJoinButton();
+      Store.set("joined_" + (sRoom ? sRoom.code : normaliseRoomCode($("#inRoom").value)), true);
       closeModal("#mWaiting");
       enterStage();
       $("#roomNameChip").textContent = p.roomName || "";
@@ -179,10 +242,13 @@ function onEvent(type, p) {
     case "quizFeedback": showQuizFeedback(p); break; // v3
     case "quizEnd": showQuizLeaderboard(p); break;   // v3
     case "waiting":                                   // v4: waiting room
-      $("#joinGate").classList.add("hide");
-      openModal("#mWaiting");
+      showWaitingState($("#inRoom").value.trim().toUpperCase(), Store.get("stuname", "Student"));
       break;
     case "admitted":                                  // v4
+      lobbyOn = false;
+      clearTimeout(lobbyTimer);
+      lobbyTimer = null;
+      restoreJoinButton();
       closeModal("#mWaiting");
       enterStage();
       toast("✅ Admitted — welcome to class!", "ok");
@@ -213,13 +279,16 @@ function onEvent(type, p) {
       cleanupAndGate("You were removed from the class by the teacher.");
       break;
     case "rejected":
-      cleanupAndGate(p.reason || "The room is locked.");
+      lobbyOn = false;
+      clearTimeout(lobbyTimer);
+      cleanupAndGate((p && p.reason) || "The room is locked.");
       break;
     case "classEnded":
-      Store.set("joined_" + (sRoom ? sRoom.code : $("#inRoom").value.trim().toUpperCase()), false);
+      Store.set("joined_" + (sRoom ? sRoom.code : normaliseRoomCode($("#inRoom").value)), false);
       cleanupAndGate("Class has ended. Thanks for attending! 🎓");
       break;
     case "disconnected":
+      if (!stageEntered) { cleanupAndGate("Connection to the teacher was lost. Tap Join class to try again."); break; }
       toast("Connection lost — trying to rejoin…", "err", 5000);
       attemptRejoin();
       break;
@@ -298,7 +367,15 @@ function sFlyEmoji(emoji, name) {
   const el = document.createElement("div");
   el.style.cssText = "position:fixed;z-index:9998;font-size:34px;pointer-events:none;left:" +
     (12 + Math.random() * 70) + "%;bottom:90px;transition:all 2.6s ease-out;opacity:1";
-  el.innerHTML = emoji + (name ? '<div style="font-size:11px;text-align:center;color:#fff;text-shadow:0 1px 3px #000">' + escapeHtml(name) + "</div>" : "");
+  const symbol = document.createElement("span");
+  symbol.textContent = String(emoji || "").slice(0, 8);
+  el.appendChild(symbol);
+  if (name) {
+    const label = document.createElement("div");
+    label.style.cssText = "font-size:11px;text-align:center;color:#fff;text-shadow:0 1px 3px #000";
+    label.textContent = String(name).slice(0, 40);
+    el.appendChild(label);
+  }
   document.body.appendChild(el);
   requestAnimationFrame(() => { el.style.bottom = "75%"; el.style.opacity = "0"; });
   setTimeout(() => el.remove(), 2700);
@@ -399,7 +476,7 @@ async function toggleMyMic() {
 
 $("#sBtnFull").addEventListener("click", toggleFullscreen);
 $("#sBtnLeave").addEventListener("click", () => {
-  if (confirm("Leave the class?")) { Store.set("joined_" + (sRoom ? sRoom.code : $("#inRoom").value.trim().toUpperCase()), false); sRoom.leave(); cleanupAndGate("You left the class."); }
+  if (confirm("Leave the class?")) { Store.set("joined_" + (sRoom ? sRoom.code : normaliseRoomCode($("#inRoom").value)), false); if (sRoom) sRoom.leave(); cleanupAndGate("You left the class."); }
 });
 
 /* ---------- polls ---------- */
@@ -505,6 +582,7 @@ function showQuizLeaderboard(rows) {
 let rejoinTries = 0;
 const REJOIN_MAX_TRIES = 75;            // ~10 min with capped backoff
 let rejoinBanner = null;
+let rejoinBusy = false;
 function showRejoinBanner() {
   if (rejoinBanner) return;
   rejoinBanner = document.createElement("div");
@@ -515,40 +593,80 @@ function showRejoinBanner() {
 function hideRejoinBanner() { if (rejoinBanner) { rejoinBanner.remove(); rejoinBanner = null; } }
 
 async function attemptRejoin() {
-  if (rejoinTries >= REJOIN_MAX_TRIES) {
-    hideRejoinBanner();
-    cleanupAndGate("Could not reconnect after several minutes. Tap Join class to try again.");
-    return;
-  }
-  rejoinTries++;
+  if (rejoinBusy || !stageEntered || lobbyOn) return;
+  rejoinBusy = true;
   showRejoinBanner();
-  const code = $("#inRoom").value.trim().toUpperCase();
+  const code = normaliseRoomCode($("#inRoom").value);
   const name = Store.get("stuname", "Student");
-  await new Promise((r) => setTimeout(r, Math.min(8000, 2000 + rejoinTries * 500)));
   try {
-    try { sRoom && sRoom.leave(); } catch {}
-    sRoom = new StudentRoom(code, name, { onEvent: onEvent, pin: $("#inPin").value.trim(), tok: qs.get("tok") || "" });
-    await sRoom.join();
-    rejoinTries = 0;
-    hideRejoinBanner();
-    toast("✅ Reconnected to the class!", "ok");
-  } catch { attemptRejoin(); }
+    while (stageEntered && !lobbyOn && rejoinTries < REJOIN_MAX_TRIES) {
+      rejoinTries++;
+      await new Promise((r) => setTimeout(r, Math.min(8000, 2000 + rejoinTries * 500)));
+      const oldRoom = sRoom;
+      try { oldRoom && oldRoom.leave(); } catch {}
+      const candidate = new StudentRoom(code, name, { onEvent: onEvent, pin: $("#inPin").value.trim(), tok: qs.get("tok") || "" });
+      sRoom = candidate;
+      try {
+        const result = await candidate.join();
+        if (!stageEntered) { candidate.leave(); return; }
+        rejoinTries = 0;
+        hideRejoinBanner();
+        if (result && result.state === "waiting") {
+          showWaitingState(code, name);
+          return;
+        }
+        toast("✅ Reconnected to the class!", "ok");
+        return;
+      } catch (e) {
+        try { candidate.leave(); } catch {}
+        if (e && e.retryable === false) {
+          cleanupAndGate(e.message || "The teacher rejected this join request.");
+          return;
+        }
+      }
+    }
+    if (stageEntered && rejoinTries >= REJOIN_MAX_TRIES) {
+      cleanupAndGate("Could not reconnect after several minutes. Tap Join class to try again.");
+    }
+  } finally {
+    rejoinBusy = false;
+  }
 }
 
 function cleanupAndGate(message) {
-  try { sRoom && sRoom.leave(); } catch {}
+  lobbyOn = false;
+  clearTimeout(lobbyTimer);
+  lobbyTimer = null;
+  const oldRoom = sRoom;
+  sRoom = null;
+  try { oldRoom && oldRoom.leave(); } catch {}
+  rejoinTries = 0;
+  hideRejoinBanner();
   stageEntered = false;
   pendingStream = null;
+  handUp = false;
+  myCamOn = false; myMicOn = false; myScreenOn = false; micAllowed = false;
+  clearInterval(quizTimerInt);
+  quizTimerInt = null;
+  $("#stageVideo").pause(); $("#stageVideo").srcObject = null;
+  $("#teacherVideo").pause(); $("#teacherVideo").srcObject = null;
   $("#stageWrap").classList.add("hide");
   $("#stageStatus").classList.add("hide");
   $("#stuControls").classList.add("hidden");
   $("#teacherPip").classList.remove("show");
   $("#sDrawerChat").classList.remove("open");
+  $("#reactBar").classList.add("hide");
+  $("#sBoardWrap").classList.add("hide");
+  $("#sbReopen").classList.add("hide");
+  $("#sGroupBanner").classList.add("hide");
+  ["#sBtnHand", "#sBtnReact", "#sBtnCam", "#sBtnScreen", "#sBtnMic"].forEach((sel) => $(sel).classList.remove("active"));
+  $("#sBtnMic").disabled = true;
+  closeModal("#mWaiting");
   $("#joinGate").classList.remove("hide");
-  $("#btnJoin").disabled = false;
+  restoreJoinButton();
   $("#joinStatus").textContent = message;
   window._wantWake = false; keepAwake(false);
-  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
 }
 
 /* ============================================================
@@ -605,7 +723,8 @@ function sbInit() {
 }
 function sbPos(e) {
   const r = sbCanvas.getBoundingClientRect();
-  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  const w = Math.max(1, r.width), h = Math.max(1, r.height);
+  return [Math.max(0, Math.min(1, (e.clientX - r.left) / w)), Math.max(0, Math.min(1, (e.clientY - r.top) / h))];
 }
 function sbResize() {
   if (!sbCanvas) return;
@@ -679,10 +798,11 @@ $("#sActSend").addEventListener("click", () => {
 function showActivityResults(d) {
   $("#sResTitle").textContent = ({ cloud: "☁ ", board: "🧱 ", open: "💬 ", exit: "🎟 " })[d.kind] + d.prompt;
   const body = $("#sResBody");
+  const items = Array.isArray(d.items) ? d.items : [];
   if (d.kind === "cloud") {
     /* build a word cloud: count words, size by frequency */
     const counts = {};
-    d.items.forEach((w) => {
+    items.forEach((w) => {
       const k = String(w).toLowerCase();
       counts[k] = (counts[k] || 0) + 1;
     });
@@ -696,10 +816,17 @@ function showActivityResults(d) {
   } else if (d.kind === "board") {
     const colors = ["#fff9c4", "#dbeafe", "#dcfce7", "#fde2e7", "#ede9fe"];
     body.style.textAlign = "left";
-    body.innerHTML = d.items.map((t, i) => '<div class="chat-msg" style="display:inline-block;vertical-align:top;min-width:150px;max-width:220px;margin:8px;padding:12px;background:' + colors[i % colors.length] + ';color:#152238;border-left:4px solid var(--accent);transform:rotate(' + (((i % 5) - 2) * 1.5) + 'deg)">' + escapeHtml(String(t)) + '</div>').join("");
+    body.innerHTML = items.map((t, i) => '<div class="chat-msg" style="display:inline-block;vertical-align:top;min-width:150px;max-width:220px;margin:8px;padding:12px;background:' + colors[i % colors.length] + ';color:#152238;border-left:4px solid var(--accent);transform:rotate(' + (((i % 5) - 2) * 1.5) + 'deg)">' + escapeHtml(String(t)) + '</div>').join("");
+  } else if (d.kind === "exit") {
+    body.style.textAlign = "left";
+    body.innerHTML = items.map((t) => {
+      const result = t && typeof t === "object" ? t : { rating: 0, learned: String(t || ""), confusing: "" };
+      const rating = Math.max(1, Math.min(5, Number(result.rating) || 1));
+      return '<div class="chat-msg"><b>' + "⭐".repeat(rating) + '</b><br/><b>Learned:</b> ' + escapeHtml(result.learned || "—") + '<br/><b>Confusing:</b> ' + escapeHtml(result.confusing || "—") + '</div>';
+    }).join("");
   } else {
     body.style.textAlign = "left";
-    body.innerHTML = d.items.map((t) => '<div class="chat-msg">' + escapeHtml(String(t)) + "</div>").join("");
+    body.innerHTML = items.map((t) => '<div class="chat-msg">' + escapeHtml(String(t)) + "</div>").join("");
   }
   openModal("#mActResults");
 }

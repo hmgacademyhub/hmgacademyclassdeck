@@ -63,6 +63,7 @@ function nowStamp() {
 }
 
 function downloadBlob(blob, filename) {
+  if (!blob) { toast("Nothing is available to download yet.", "err"); return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -95,9 +96,10 @@ document.addEventListener("visibilitychange", () => {
 /* ---------- fullscreen toggle ---------- */
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
+    if (!document.documentElement.requestFullscreen) { toast("Fullscreen is not supported by this browser", "err"); return; }
     document.documentElement.requestFullscreen().catch(() => toast("Fullscreen blocked by browser", "err"));
-  } else {
-    document.exitFullscreen();
+  } else if (document.exitFullscreen) {
+    document.exitFullscreen().catch(() => {});
   }
 }
 

@@ -145,8 +145,7 @@ and your boards are exactly where you left them (autosave).
 12. **Connection lost?** Stay on the page — a yellow banner shows while it
     reconnects you automatically (it keeps trying for up to 10 minutes).
 
-**Data-saving tip:** the class video is optimised for low data (~150–300 MB per
-hour at default quality). Wi-Fi is still cheaper than mobile data!
+**Data-saving tip:** actual data use depends on browser encoding, quality and the number of students. The default 720p composite can use substantially more than a few hundred MB per hour; choose 720p at 8 fps and monitor your mobile-data plan. Wi-Fi is still cheaper than mobile data!
 
 ---
 

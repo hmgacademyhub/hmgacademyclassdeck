@@ -65,8 +65,13 @@ async function _signAccount(acc) {
 }
 async function getAccount() {
   const acc = Store.get("account", null);
-  if (!acc) return null;
-  if ((await _signAccount(acc)) !== acc.sig) { Store.set("account", null); return null; } // tampered
+  if (!acc || typeof acc !== "object" || typeof acc.email !== "string" || typeof acc.hash !== "string" || !Number.isFinite(Number(acc.created))) return null;
+  try {
+    if ((await _signAccount(acc)) !== acc.sig) { Store.set("account", null); return null; } // tampered
+  } catch {
+    Store.set("account", null);
+    return null;
+  }
   return acc;
 }
 
@@ -168,7 +173,7 @@ function startEntitlementRefresh(acc) {
     if (!res.ok && LICENSE_MODE === "strict") {
       Store.set("licenseLease", null);
       window.HMG_AUTH_OK = false;
-      try { if (typeof endLive === "function" && window.room) endLive(); } catch {}
+      try { if (typeof endLive === "function" && window.room) endLive(true); } catch {}
       requireTeacherAccess();
     }
   }, mins * 60000);
@@ -336,20 +341,27 @@ function deviceId() {
 
 /* central revocation — fetched from your own deployment (free) */
 let _revoked = null;
+function validRevocationList(value) {
+  return value && typeof value === "object" && Array.isArray(value.keys) && Array.isArray(value.blockedEmails)
+    ? { keys: value.keys.map((x) => String(x).trim().toUpperCase()), blockedEmails: value.blockedEmails.map((x) => String(x).trim().toLowerCase()) }
+    : { keys: [], blockedEmails: [] };
+}
 async function fetchRevocations() {
   if (_revoked) return _revoked;
+  const cached = validRevocationList(Store.get("revoked_cache", { keys: [], blockedEmails: [] }));
   try {
     const r = await fetch("revoked.json?t=" + Date.now(), { cache: "no-store", signal: timeoutSignal(8000) });
-    if (r.ok) _revoked = await r.json();
-  } catch { _revoked = Store.get("revoked_cache", { keys: [], blockedEmails: [] }); }
-  if (_revoked) Store.set("revoked_cache", _revoked);
-  return _revoked || { keys: [], blockedEmails: [] };
+    if (!r.ok) throw new Error("revocation list " + r.status);
+    _revoked = validRevocationList(await r.json());
+  } catch { _revoked = cached; }
+  Store.set("revoked_cache", _revoked);
+  return _revoked;
 }
 
 async function isRevoked(acc, lic) {
   const rv = await fetchRevocations();
-  if (lic && rv.keys && rv.keys.includes(lic.key)) return "This license key has been deactivated. Contact HMG ACADEMY.";
-  if (acc && rv.blockedEmails && rv.blockedEmails.includes(acc.email)) return "This account has been suspended. Contact HMG ACADEMY.";
+  if (lic && rv.keys.includes(String(lic.key || "").trim().toUpperCase())) return "This license key has been deactivated. Contact HMG ACADEMY.";
+  if (acc && rv.blockedEmails.includes(String(acc.email || "").trim().toLowerCase())) return "This account has been suspended. Contact HMG ACADEMY.";
   return null;
 }
 

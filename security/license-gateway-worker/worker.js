@@ -28,29 +28,41 @@ async function putJsonKV(env, key, value, opts) {
   if (!env.LICENSE_KV) return;
   await env.LICENSE_KV.put(key, JSON.stringify(value), opts || {});
 }
-async function findLicense(env, licenseKey, email) {
+async function findLicense(env, licenseKey) {
   const key = String(licenseKey || '').trim().toUpperCase();
+  // A teacher email must never be enough to activate a license. The client
+  // sends the key, and the gateway verifies that exact key record.
   if (!key) return null;
   const fromKV = await getJsonKV(env, `license:${key}`, null);
   if (fromKV) return { key, ...fromKV };
   try {
     const arr = JSON.parse(env.LICENSES_JSON || '[]');
-    const hit = arr.find((x) => String(x.key || '').toUpperCase() === key || (x.email && norm(x.email) === norm(email)));
-    return hit ? { key: String(hit.key || key).toUpperCase(), ...hit } : null;
+    const hit = Array.isArray(arr) && arr.find((x) => String(x.key || '').trim().toUpperCase() === key);
+    return hit ? { key, ...hit } : null;
   } catch { return null; }
 }
+function expiryTime(value) {
+  const text = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return Date.parse(text + 'T23:59:59.999Z');
+  return Date.parse(text);
+}
 async function verify(body, env) {
+  body = body && typeof body === 'object' ? body : {};
   const email = norm(body.email), device = String(body.device || '').slice(0, 80), name = String(body.name || '').slice(0, 80);
   if (!email || !device) return { ok: false, why: 'Missing teacher email or device id.' };
   const block = await getJsonKV(env, `blocked:${email}`, null);
   if (block) return { ok: false, why: 'This account has been suspended. Contact HMG Academy.' };
   const trialDays = Number(env.TRIAL_DAYS || 3), leaseMinutes = Number(env.LEASE_MINUTES || 30);
-  const lic = await findLicense(env, body.licenseKey, email);
+  const lic = await findLicense(env, body.licenseKey);
   if (lic) {
     if (lic.status && lic.status !== 'active') return { ok: false, why: 'License is not active.' };
     if (lic.email && norm(lic.email) !== email) return { ok: false, why: 'License belongs to another email.' };
-    if (lic.expires && new Date(lic.expires).getTime() < now()) return { ok: false, why: 'License expired.' };
-    const maxDevices = Number(lic.devices || 2);
+    if (lic.expires) {
+      const expiry = expiryTime(lic.expires);
+      if (!Number.isFinite(expiry)) return { ok: false, why: 'License expiry is invalid.' };
+      if (expiry <= now()) return { ok: false, why: 'License expired.' };
+    }
+    const maxDevices = Math.max(1, Math.min(10, Number(lic.devices || 2) || 2));
     const dkey = `license-devices:${String(lic.key).toUpperCase()}`;
     let devices = await getJsonKV(env, dkey, []);
     if (!devices.includes(device)) {
@@ -83,8 +95,8 @@ export default {
     // Simple admin endpoints for adding/blocking license records via curl.
     if (url.pathname === '/api/admin/license' && req.method === 'POST') {
       if (req.headers.get('x-admin-secret') !== env.ADMIN_SECRET) return json({ ok: false, why: 'unauthorized' }, 401);
-      const b = await req.json(); const key = String(b.key || '').toUpperCase();
-      if (!key) return json({ ok: false, why: 'missing key' }, 400);
+      const b = await req.json(); const key = String(b.key || '').trim().toUpperCase();
+      if (!/^HMG-\d{6}-[0-9A-F]{10}$/.test(key)) return json({ ok: false, why: 'invalid key format' }, 400);
       await putJsonKV(env, `license:${key}`, { email: norm(b.email), name: b.name || '', expires: b.expires || '', devices: Number(b.devices || 2), plan: b.plan || 'teacher', status: b.status || 'active' });
       return json({ ok: true, key });
     }

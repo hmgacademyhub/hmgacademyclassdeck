@@ -26,6 +26,26 @@ const READER_THEMES = {
   board: { page: "#16382a", bg: "#0c241a", text: "#dcefe4", head: "#ffe066", accent: "#8be0ae", dim: "#7fa590", line: "#235040", quoteBg: "#1d4534" }
 };
 
+function readerFetch(url, options = {}, timeoutMs = 20000, parentSignal) {
+  if (typeof AbortController === "undefined") {
+    return Promise.race([
+      fetch(url, options),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Request timed out")), timeoutMs))
+    ]);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortParent = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) controller.abort();
+    else parentSignal.addEventListener("abort", abortParent, { once: true });
+  }
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener("abort", abortParent);
+  });
+}
+
 class ReaderView {
   constructor(stageEl, opts = {}) {
     this.stage = stageEl;
@@ -44,12 +64,18 @@ class ReaderView {
     this.title = "";
     this.url = "";
     this.site = "";
+    this._loadId = 0;
+    this._loadAbort = null;
     this._bind();
     new ResizeObserver(() => this.draw()).observe(this.stage);
     this.draw();
   }
 
-  setTheme(t) { this.theme = t; Store.set("reader_theme", t); this.draw(); }
+  setTheme(t) {
+    this.theme = READER_THEMES[t] ? t : "light";
+    Store.set("reader_theme", this.theme);
+    this.draw();
+  }
   setFontScale(s) {
     this.fontScale = Math.max(0.65, Math.min(2.2, s));
     Store.set("reader_font", this.fontScale);
@@ -58,9 +84,26 @@ class ReaderView {
 
   /* ---------------- fetching ---------------- */
   async load(url) {
-    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+    const requestId = ++this._loadId;
+    if (this._loadAbort) this._loadAbort.abort();
+    let parsed;
+    try {
+      parsed = new URL(/^https?:\/\//i.test(String(url)) ? String(url) : "https://" + String(url));
+      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only web pages can be cast.");
+    } catch {
+      this.status = "error";
+      this.statusMsg = "Enter a valid http:// or https:// web address.";
+      this.draw();
+      this.onState(this.status);
+      return;
+    }
+    url = parsed.href;
+    this._loadAbort = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const parentSignal = this._loadAbort ? this._loadAbort.signal : undefined;
+    const current = () => requestId === this._loadId;
+
     this.url = url;
-    try { this.site = new URL(url).hostname.replace(/^www\./, ""); } catch { this.site = url; }
+    this.site = parsed.hostname.replace(/^www\./, "");
     this.status = "loading";
     this.statusMsg = "Fetching “" + this.site + "”…";
     this.scroll = 0;
@@ -71,27 +114,34 @@ class ReaderView {
     try {
       let blocks = null;
       try {
-        const r = await fetch("https://r.jina.ai/" + url, { headers: { "Accept": "text/plain" }, signal: AbortSignal.timeout(20000) });
+        const r = await readerFetch("https://r.jina.ai/" + url, { headers: { "Accept": "text/plain" } }, 20000, parentSignal);
+        if (!current()) return;
         if (r.ok) {
           const txt = await r.text();
           if (txt && txt.length > 60) blocks = this._parseMarkdown(txt);
         }
       } catch {}
+      if (!current()) return;
       if (!blocks || blocks.length < 3) {
         try {
           await new Promise((res) => setTimeout(res, 1200));
-          const rr = await fetch("https://r.jina.ai/" + url, { headers: { "Accept": "text/plain" }, signal: AbortSignal.timeout(25000) });
+          if (!current()) return;
+          const rr = await readerFetch("https://r.jina.ai/" + url, { headers: { "Accept": "text/plain" } }, 25000, parentSignal);
+          if (!current()) return;
           if (rr.ok) {
             const t2 = await rr.text();
             if (t2 && t2.length > 60) blocks = this._parseMarkdown(t2);
           }
         } catch {}
       }
+      if (!current()) return;
       if (!blocks || blocks.length < 3) {
-        const r2 = await fetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(url), { signal: AbortSignal.timeout(25000) });
+        const r2 = await readerFetch("https://api.allorigins.win/raw?url=" + encodeURIComponent(url), {}, 25000, parentSignal);
+        if (!current()) return;
         if (!r2.ok) throw new Error("proxy " + r2.status);
         blocks = this._parseHTML(await r2.text(), url);
       }
+      if (!current()) return;
       if (!blocks || !blocks.length) throw new Error("No readable content found");
       this.blocks = this._polish(blocks).slice(0, 460);
       this.status = "ready";
@@ -99,11 +149,17 @@ class ReaderView {
       this._loadImages();
       this.draw();
     } catch (e) {
+      if (!current()) return;
+      if (e && e.name === "AbortError") return;
       this.status = "error";
       this.statusMsg = "Could not fetch this page (" + (e.message || "network") + "). Some sites block readers — try another page, or save it as PDF for the PDF pane.";
       this.draw();
+    } finally {
+      if (current()) {
+        this._loadAbort = null;
+        this.onState(this.status);
+      }
     }
-    this.onState(this.status);
   }
 
   /* tidy up: drop nav junk, merge tiny fragments, mark lead paragraph */

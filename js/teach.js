@@ -21,16 +21,23 @@ if (window.pdfjsLib) {
    1. Pane / app management
    ------------------------------------------------------------ */
 const APPS = ["board", "pdf", "web", "notes", "image", "graph", "video", "toolkit", "flash", "stopwatch"];
+function storedApp(key, fallback) {
+  const value = Store.get(key, fallback);
+  return APPS.includes(value) ? value : fallback;
+}
 const paneState = {
-  L: { app: Store.get("pane_L", "board"), instances: {} },
-  R: { app: Store.get("pane_R", "pdf"),   instances: {} }
+  L: { app: storedApp("pane_L", "board"), instances: {} },
+  R: { app: storedApp("pane_R", "pdf"),   instances: {} }
 };
 let layoutMode = Store.get("layout", "split"); // split | left | right
+if (!["split", "left", "right"].includes(layoutMode)) layoutMode = "split";
 
 const bodyEls = { L: $("#bodyL"), R: $("#bodyR") };
 
 function mountApp(side, app) {
   const st = paneState[side];
+  if (!st || !bodyEls[side]) return;
+  app = APPS.includes(app) ? app : (side === "L" ? "board" : "pdf");
   st.app = app;
   Store.set("pane_" + side, app);
 
@@ -82,7 +89,9 @@ function initApp(side, app, inst) {
 /* ---- v6: flashcards pane ---- */
 function initFlash(side, inst) {
   const el = inst.el;
-  let cards = Store.get("flashcards", [["Photosynthesis", "The process by which green plants make their own food using sunlight, water and carbon dioxide."], ["7 × 8", "56"], ["Capital of Nigeria", "Abuja"]]);
+  const defaultCards = [["Photosynthesis", "The process by which green plants make their own food using sunlight, water and carbon dioxide."], ["7 × 8", "56"], ["Capital of Nigeria", "Abuja"]];
+  const savedCards = Store.get("flashcards", defaultCards);
+  let cards = Array.isArray(savedCards) ? savedCards.filter((card) => Array.isArray(card) && card.length >= 2 && card[0] && card[1]).map((card) => [String(card[0]), String(card[1])]) : defaultCards;
   let idx = 0, front = true;
   const textEl = $(".fc-text", el), posEl = $(".fc-pos", el), cardEl = $(".fc-card", el);
   inst.getFlashState = () => ({ text: textEl.textContent, front, pos: posEl.textContent });
@@ -171,7 +180,7 @@ function initStopwatch(side, inst) {
   tick();
 }
 
-/* ---- v5/v6: educational toolkit pane (100+ tools) ---- */
+/* ---- v5/v6: educational toolkit pane (200+ tool modes) ---- */
 function initToolkit(side, inst) {
   const el = inst.el;
   const tk = new Toolkit($(".tk-stage", el), { mode: "construct" });
@@ -319,7 +328,9 @@ function initToolkit(side, inst) {
 function initBoard(side, inst) {
   const el = inst.el;
   const stage = $(".wb-stage", el);
-  const wb = new Whiteboard(stage, { onChange: updatePageInfo });
+  // Keep the two pane boards independent. The left key preserves the legacy
+  // storage name; the right pane gets its own key instead of overwriting it.
+  const wb = new Whiteboard(stage, { onChange: updatePageInfo, persistKey: side === "L" ? "wb_pages" : "wb_pages_R" });
   inst.wb = wb;
 
   function updatePageInfo() {
@@ -604,6 +615,7 @@ function initWeb(side, inst) {
 
   /* optional TRUE live capture — desktops only */
   $(".web-livecast", el).addEventListener("click", async (e) => {
+    if (typeof authEnforce === "function" && !authEnforce()) return;
     const btn = e.currentTarget;
     if (window._castStream) { stopWebCast(); btn.classList.remove("active"); return; }
     try {
@@ -630,7 +642,8 @@ function stopWebCast() {
     window._castStream.getTracks().forEach((t) => t.stop());
     window._castStream = null;
   }
-  startCompositeStage();   // back to the normal split-screen broadcast
+  if (room) startCompositeStage();   // back to the normal split-screen broadcast
+  else stageStream = null;
   toast("Back to normal broadcast (split-screen composite).", "ok");
 }
 
@@ -655,8 +668,11 @@ function initImage(side, inst) {
   const el = inst.el;
   const img = $(".img-view", el);
   inst.imgEl = img;
+  let objectUrl = "";
   function load(f) {
-    img.src = URL.createObjectURL(f);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(f);
+    img.src = objectUrl;
     img.onload = () => $(".img-hint", el).classList.add("hide");
   }
   $(".img-open", el).addEventListener("click", () => $(".img-file", el).click());
@@ -865,9 +881,11 @@ function initVideo(side, inst) {
   const el = inst.el;
   const vid = $(".vid-el", el);
   inst.videoEl = vid;
-  let rate = 1;
+  let rate = 1, objectUrl = "";
   function load(f) {
-    vid.src = URL.createObjectURL(f);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(f);
+    vid.src = objectUrl;
     $(".vid-hint", el).classList.add("hide");
     vid.play().catch(() => {});
   }
@@ -888,7 +906,9 @@ function initVideo(side, inst) {
    ------------------------------------------------------------ */
 const workspace = $("#workspace");
 const divider = $("#divider");
-let splitRatio = Store.get("split", 0.5);
+let splitRatio = Number(Store.get("split", 0.5));
+if (!Number.isFinite(splitRatio)) splitRatio = 0.5;
+splitRatio = Math.min(0.8, Math.max(0.2, splitRatio));
 
 function applySplit() {
   $("#paneLeft").style.flex = `1 1 ${splitRatio * 100}%`;
@@ -901,10 +921,15 @@ divider.addEventListener("pointerdown", (e) => { dragging = true; divider.setPoi
 divider.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   const r = workspace.getBoundingClientRect();
-  splitRatio = Math.min(0.8, Math.max(0.2, (e.clientX - r.left) / r.width));
+  const vertical = getComputedStyle(workspace).flexDirection === "column";
+  const primary = vertical ? e.clientY - r.top : e.clientX - r.left;
+  const extent = vertical ? r.height : r.width;
+  if (extent > 0) splitRatio = Math.min(0.8, Math.max(0.2, primary / extent));
   applySplit();
 });
-divider.addEventListener("pointerup", () => { dragging = false; Store.set("split", splitRatio); resizeBoards(); });
+const finishDividerDrag = () => { dragging = false; Store.set("split", splitRatio); resizeBoards(); };
+divider.addEventListener("pointerup", finishDividerDrag);
+divider.addEventListener("pointercancel", finishDividerDrag);
 
 function resizeBoards() {
   for (const side of ["L", "R"]) {
@@ -961,9 +986,12 @@ const COMP = { canvas: document.createElement("canvas"), ctx: null, raf: null, f
 COMP.ctx = COMP.canvas.getContext("2d");
 
 function setQuality(qstr) {
-  const [w, h, f] = qstr.split("x").map(Number);
+  const allowed = { "1280x720x8": [1280, 720, 8], "1280x720x15": [1280, 720, 15], "1920x1080x10": [1920, 1080, 10] };
+  const [w, h, f] = allowed[qstr] || allowed["1280x720x8"];
+  const value = allowed[qstr] ? qstr : "1280x720x8";
   COMP.w = w; COMP.h = h; COMP.fps = f;
   COMP.canvas.width = w; COMP.canvas.height = h;
+  if (Store.get("quality", "1280x720x8") !== value) Store.set("quality", value);
 }
 setQuality(Store.get("quality", "1280x720x8"));
 
@@ -983,6 +1011,13 @@ function compositeLoop(ts) {
     return;
   }
   drawComposite();
+}
+
+function stopCompositeLoopIfUnused() {
+  if (!room && !recorder && !tabletLive.pc && !pipActive && !window._castStream && COMP.raf) {
+    cancelAnimationFrame(COMP.raf);
+    COMP.raf = null;
+  }
 }
 
 function drawComposite() {
@@ -1213,6 +1248,7 @@ function wrapText(ctx, text, x, y, maxW, lineH) {
    5. Live class
    ------------------------------------------------------------ */
 let room = null;
+let lastEndedRoom = null;
 let micStream = null, camStream = null;
 let micOn = false, camOn = false;
 let stageStream = null;
@@ -1325,12 +1361,13 @@ async function goLive() {
   $("#btnGoLive").disabled = true;
   toast("Starting class…");
   try {
+    lastEndedRoom = null;
     room = new TeacherRoom(roomCode, { onEvent: onRoomEvent });
     room.roomName = Store.get("roomname", "") || ("Class " + roomCode);
     room.pin = Store.get("pin", "");
     room.inviteToken = Store.get("secure_invite", false) ? rotateInviteToken() : "";
     /* Join-issue fix: students now join directly by default unless the teacher explicitly enables the waiting room. */
-    room.waitingRoom = Store.get("waitroom", false);
+    room.setWaitingRoom(Store.get("waitroom", false));
     room.autoAdmitRejoin = Store.get("wasLive", false); // resume fix: previously admitted students bypass waiting room
     syncWaitingRoomUI(room.waitingRoom);
     refreshPendingBadge();
@@ -1340,7 +1377,7 @@ async function goLive() {
 
     // build the stage stream
     const mode = Store.get("broadcast", "composite");
-    if (mode === "screen" && navigator.mediaDevices.getDisplayMedia) {
+    if (mode === "screen" && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
       try {
         stageStream = await navigator.mediaDevices.getDisplayMedia({
           video: { frameRate: { ideal: COMP.fps, max: Math.max(COMP.fps, 15) } },
@@ -1385,6 +1422,11 @@ async function goLive() {
   } catch (e) {
     try { room && room.end && room.end(); } catch {}
     room = null;
+    if (COMP.raf) { cancelAnimationFrame(COMP.raf); COMP.raf = null; }
+    try { stageStream && stageStream.getTracks().forEach((t) => t.stop()); } catch {}
+    stageStream = null;
+    try { micStream && micStream.getTracks().forEach((t) => t.stop()); } catch {}
+    micStream = null; micOn = false; $("#btnMic").classList.remove("active");
     refreshPendingBadge();
     syncWaitingRoomUI();
     toast(e.message || "Could not start class", "err", 6000);
@@ -1392,7 +1434,14 @@ async function goLive() {
   }
 }
 
+function stopStageSourceExceptMic(stream) {
+  if (!stream) return;
+  const micTracks = micStream ? micStream.getTracks() : [];
+  stream.getTracks().forEach((track) => { if (!micTracks.includes(track)) { try { track.stop(); } catch {} } });
+}
 function startCompositeStage() {
+  if (!COMP.canvas.captureStream) throw new Error("This browser cannot capture the ClassDeck workspace.");
+  stopStageSourceExceptMic(stageStream);
   if (COMP.raf) cancelAnimationFrame(COMP.raf);
   drawComposite();
   COMP.raf = requestAnimationFrame(compositeLoop);
@@ -1406,6 +1455,12 @@ async function ensureMic(on) {
   if (on && !micStream) {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: { ideal: 48000 } }, video: false });
+      const micTrack = micStream.getAudioTracks()[0];
+      if (micTrack) micTrack.addEventListener("ended", () => {
+        micOn = false;
+        $("#btnMic")?.classList.remove("active");
+        toast("Microphone stopped by the browser or device.", "err", 5000);
+      });
       micOn = true;
       if (stageStream) micStream.getAudioTracks().forEach((t) => stageStream.addTrack(t));
       $("#btnMic").classList.add("active");
@@ -1427,6 +1482,13 @@ $("#btnCam").addEventListener("click", async () => {
       camStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, frameRate: { ideal: 15 }, facingMode: "user" }, audio: false
       });
+      const camTrack = camStream.getVideoTracks()[0];
+      if (camTrack) camTrack.addEventListener("ended", () => {
+        camOn = false; camStream = null;
+        $("#selfVideo").srcObject = null; $("#selfView").classList.remove("show"); $("#btnCam").classList.remove("active");
+        if (room) room.setCamStream(null);
+        toast("Camera stopped by the browser or device.", "err", 5000);
+      });
       $("#selfVideo").srcObject = camStream;
       $("#selfView").classList.add("show");
       camOn = true;
@@ -1444,23 +1506,29 @@ $("#btnCam").addEventListener("click", async () => {
   }
 });
 
-function endLive() {
-  if (!confirm("End the class for everyone?")) return;
+function endLive(force = false) {
+  if (!force && !confirm("End the class for everyone?")) return;
   Store.set("wasLive", false);   /* v5: deliberate end — don't auto-resume */
   const endedRoom = room;
-  if (endedRoom) { endedRoom.end(); }
+  if (endedRoom) { endedRoom.stats.end = Date.now(); endedRoom.end(); lastEndedRoom = endedRoom; }
   if (typeof stopCaptions === "function") stopCaptions(true);
-  if (COMP.raf) { cancelAnimationFrame(COMP.raf); COMP.raf = null; }
-  try {
-    if (stageStream) {
-      // Stop only the classroom stage tracks. Do not stop the shared mic/camera objects here
-      // because the teacher may want to keep recording or re-start quickly.
-      stageStream.getVideoTracks().forEach((t) => t.stop());
-      stageStream = null;
-    }
-  } catch {}
+  // Stop an active recording before releasing its shared microphone track so
+  // the final MediaRecorder data is flushed cleanly.
   if (recorder && recorder.state !== "inactive") stopRecording();
-  clearInterval(classTickInt);
+  if (window._castStream) {
+    try { window._castStream.getTracks().forEach((t) => t.stop()); } catch {}
+    window._castStream = null;
+  }
+  if (tabletLive && tabletLive.pc) stopTabletSocialLive(true);
+  if (document.pictureInPictureElement && typeof exitClassDeckPiP === "function") exitClassDeckPiP();
+  if (COMP.raf) { cancelAnimationFrame(COMP.raf); COMP.raf = null; }
+  try { if (stageStream) stageStream.getTracks().forEach((t) => t.stop()); } catch {}
+  stageStream = null;
+  try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch {}
+  micStream = null; micOn = false; $("#btnMic").classList.remove("active");
+  try { if (camStream) camStream.getTracks().forEach((t) => t.stop()); } catch {}
+  camStream = null; camOn = false; $("#selfVideo").srcObject = null; $("#selfView").classList.remove("show"); $("#btnCam").classList.remove("active");
+  clearInterval(classTickInt); classTickInt = null;
   $("#liveBadge").classList.add("hide");
   $("#btnEndLive").classList.add("hide");
   $("#btnGoLive").classList.remove("hide");
@@ -1470,9 +1538,10 @@ function endLive() {
   room = null;
   refreshPendingBadge();
   syncWaitingRoomUI();
+  renderRoster(); renderWaiting(); renderLeaderboard();
   window._wantWake = false; keepAwake(false);
   audit("end-live", "Class ended");
-  toast("Class ended. Attendance is available in the Students drawer until you reload.");
+  toast("Class ended. Attendance and the class report remain available in the Students drawer until you reload.");
 }
 
 /* ---- room events ---- */
@@ -1487,6 +1556,8 @@ function onRoomEvent(type, p) {
     case "student-left":
       toast(p.name + " left");
       removeCamTile(p.peerId);
+      removeCamTile("scr-" + p.peerId);
+      removeStudentAudio(p.peerId);
       renderRoster();
       break;
     case "roster": renderRoster(); break;
@@ -1512,6 +1583,7 @@ function onRoomEvent(type, p) {
     case "student-media-end":
       if (p.kind === "stucam") removeCamTile(p.peerId);
       if (p.kind === "stuscreen") removeCamTile("scr-" + p.peerId);
+      if (p.kind === "stumic") removeStudentAudio(p.peerId);
       break;
     case "poll-update": renderPollBars(p); break;
     case "signal":
@@ -1525,49 +1597,53 @@ function onRoomEvent(type, p) {
 
 function renderRoster() {
   const list = $("#rosterList");
-  if (!room || room.students.size === 0) {
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom || dataRoom.students.size === 0) {
     list.innerHTML = '<p style="color:var(--text-dim);font-size:13px">No students yet. Share the room link.</p>';
     return;
   }
   list.innerHTML = "";
-  for (const [pid, stu] of room.students) {
+  for (const [pid, stu] of dataRoom.students) {
     const row = document.createElement("div");
     row.className = "stu-row";
+    row.dataset.peerId = pid;
     row.innerHTML = `
       <span class="hand">${stu.hand ? "✋" : ""}</span>
-      <span class="name">${escapeHtml(stu.name)}</span>
+      <span class="name">${escapeHtml(stu.name)}</span>` +
+      (room ? `
       <button class="btn small" data-act="cam" title="Ask/stop camera">📷</button>
       <button class="btn small" data-act="scr" title="Ask student to share their screen">🖥</button>
       <button class="btn small" data-act="mic" title="Allow/revoke mic">🎙</button>
-      <button class="btn small danger" data-act="kick" title="Remove">✕</button>`;
-    row.querySelector('[data-act="cam"]').addEventListener("click", (e) => {
-      const b = e.currentTarget;
-      const on = !b.classList.contains("active");
-      b.classList.toggle("active", on);
-      room.requestStudentCam(pid, on);
-      toast(on ? "Asked " + stu.name + " to turn camera on" : "Asked " + stu.name + " to turn camera off");
-    });
-    row.querySelector('[data-act="scr"]').addEventListener("click", (e) => {  /* v5 */
-      const b = e.currentTarget;
-      const on = !b.classList.contains("active");
-      b.classList.toggle("active", on);
-      room.requestStudentScreen(pid, on);
-      toast(on ? "Asked " + stu.name + " to share their screen" : "Asked " + stu.name + " to stop sharing");
-    });
-    row.querySelector('[data-act="mic"]').addEventListener("click", (e) => {
-      const b = e.currentTarget;
-      const on = !b.classList.contains("active");
-      b.classList.toggle("active", on);
-      room.allowMic(pid, on);
-      toast(on ? stu.name + " may now speak" : "Mic permission revoked for " + stu.name);
-    });
-    row.querySelector('[data-act="kick"]').addEventListener("click", () => {
-      if (confirm("Remove " + stu.name + " from the class?")) room.kick(pid);
-    });
+      <button class="btn small danger" data-act="kick" title="Remove">✕</button>` : "");
+    if (room) {
+      row.querySelector('[data-act="cam"]').addEventListener("click", (e) => {
+        const b = e.currentTarget;
+        const on = !b.classList.contains("active");
+        b.classList.toggle("active", on);
+        room.requestStudentCam(pid, on);
+        toast(on ? "Asked " + stu.name + " to turn camera on" : "Asked " + stu.name + " to turn camera off");
+      });
+      row.querySelector('[data-act="scr"]').addEventListener("click", (e) => {
+        const b = e.currentTarget;
+        const on = !b.classList.contains("active");
+        b.classList.toggle("active", on);
+        room.requestStudentScreen(pid, on);
+        toast(on ? "Asked " + stu.name + " to share their screen" : "Asked " + stu.name + " to stop sharing");
+      });
+      row.querySelector('[data-act="mic"]').addEventListener("click", (e) => {
+        const b = e.currentTarget;
+        const on = !b.classList.contains("active");
+        b.classList.toggle("active", on);
+        room.allowMic(pid, on);
+        toast(on ? stu.name + " may now speak" : "Mic permission revoked for " + stu.name);
+      });
+      row.querySelector('[data-act="kick"]').addEventListener("click", () => {
+        if (confirm("Remove " + stu.name + " from the class?")) room.kick(pid);
+      });
+    }
     list.appendChild(row);
   }
 }
-
 function addCamTile(pid, name, stream) {
   removeCamTile(pid);
   const tile = document.createElement("div");
@@ -1585,8 +1661,16 @@ function removeCamTile(pid) {
 const stuAudio = new Map();
 function playStudentAudio(pid, stream) {
   let a = stuAudio.get(pid);
-  if (!a) { a = document.createElement("audio"); a.autoplay = true; document.body.appendChild(a); stuAudio.set(pid, a); }
+  if (!a) { a = document.createElement("audio"); a.autoplay = true; a.playsInline = true; document.body.appendChild(a); stuAudio.set(pid, a); }
   a.srcObject = stream;
+  a.play().catch(() => {});
+}
+function removeStudentAudio(pid) {
+  const a = stuAudio.get(pid);
+  if (!a) return;
+  try { a.pause(); a.srcObject = null; } catch {}
+  a.remove();
+  stuAudio.delete(pid);
 }
 
 /* ---- drawers ---- */
@@ -1596,7 +1680,7 @@ function toggleDrawer(id) {
   $$(".drawer").forEach((x) => x.classList.remove("open"));
   if (!open) d.classList.add("open");
 }
-$("#btnStudents").addEventListener("click", () => toggleDrawer("#drawerStudents"));
+$("#btnStudents").addEventListener("click", () => { renderRoster(); renderWaiting(); toggleDrawer("#drawerStudents"); });
 $("#btnChat").addEventListener("click", () => toggleDrawer("#drawerChat"));
 $("#btnPoll").addEventListener("click", () => toggleDrawer("#drawerPoll"));
 $$(".drawer-close").forEach((b) => b.addEventListener("click", () => b.closest(".drawer").classList.remove("open")));
@@ -1641,8 +1725,9 @@ $("#btnLock").addEventListener("click", (e) => {
   toast(room.locked ? "Room locked — no new students can join" : "Room unlocked");
 });
 $("#btnAttendance").addEventListener("click", () => {
-  if (!room) { toast("No class data yet"); return; }
-  downloadBlob(new Blob([room.attendanceCSV()], { type: "text/csv" }), "attendance-" + roomCode + "-" + Date.now() + ".csv");
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) { toast("No class data yet"); return; }
+  downloadBlob(new Blob([dataRoom.attendanceCSV()], { type: "text/csv" }), "attendance-" + roomCode + "-" + Date.now() + ".csv");
 });
 $("#btnAskAllCams").addEventListener("click", () => {
   if (!room) return;
@@ -1656,7 +1741,7 @@ $("#pollStart").addEventListener("click", () => {
   const q = $("#pollQ").value.trim();
   const opts = $("#pollOpts").value.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 6);
   if (!q || opts.length < 2) { toast("Enter a question and at least 2 options", "err"); return; }
-  room.startPoll(q, opts);
+  if (!room.startPoll(q, opts)) { toast("Enter a question and at least 2 options", "err"); return; }
   $("#pollSetup").classList.add("hide");
   $("#pollLive").classList.remove("hide");
   $("#pollLiveQ").textContent = q;
@@ -1869,6 +1954,11 @@ function recLoop(ts) {
 }
 
 async function startRecording() {
+  if (typeof MediaRecorder === "undefined" || !recCanvasCaptureSupported()) {
+    toast("Recording is not supported by this browser.", "err");
+    return;
+  }
+  if (recorder && recorder.state !== "inactive") return;
   if (!COMP.raf) { drawComposite(); COMP.raf = requestAnimationFrame(compositeLoop); }
   /* dedicated branded canvas */
   recCanvas = document.createElement("canvas");
@@ -1879,43 +1969,66 @@ async function startRecording() {
   recStream = new MediaStream(recCanvas.captureStream(COMP.fps).getVideoTracks());
   await ensureMic(true);
   if (micStream) micStream.getAudioTracks().forEach((t) => recStream.addTrack(t));
+  const candidates = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2", // Safari/new Chromium where available
+    "video/mp4",
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
+  ];
+  const mime = candidates.find((m) => typeof MediaRecorder.isTypeSupported !== "function" || MediaRecorder.isTypeSupported(m)) || "";
   try {
-    const candidates = [
-      "video/mp4;codecs=avc1.42E01E,mp4a.40.2", // Safari/new Chromium where available
-      "video/mp4",
-      "video/webm;codecs=vp9,opus",
-      "video/webm;codecs=vp8,opus",
-      "video/webm"
-    ];
-    const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || "";
-    recorder = new MediaRecorder(recStream, {
+    const chunks = [];
+    const activeRecorder = new MediaRecorder(recStream, {
       mimeType: mime || undefined,
       videoBitsPerSecond: 2_500_000,
       audioBitsPerSecond: 128_000
     });
-    recChunks = [];
-    recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
-    recorder.onstop = () => {
-      const safe = (s) => s.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-");
-      const outType = recorder.mimeType || mime || "video/webm";
+    recorder = activeRecorder;
+    recChunks = chunks;
+    activeRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    activeRecorder.onstop = () => {
+      const safe = (value) => String(value || "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-");
+      const outType = activeRecorder.mimeType || mime || "video/webm";
       const ext = outType.includes("mp4") ? ".mp4" : ".webm";
       const fname = [safe(recMeta.brand || "Lesson"), safe(recMeta.subject || ""), safe(recMeta.topic || ""), safe(recMeta.klass || ""), new Date().toISOString().slice(0, 10)].filter(Boolean).join("_") + ext;
-      downloadBlob(new Blob(recChunks, { type: outType }), fname);
+      if (chunks.length) downloadBlob(new Blob(chunks, { type: outType }), fname);
       recChunks = [];
     };
-    recorder.start(2000);
+    activeRecorder.start(2000);
     $("#btnRec").classList.add("active");
-    toast("⏺ Recording started — " + ((recorder.mimeType || mime || "webm").includes("mp4") ? "MP4" : "WebM") + " on this device when you stop", "ok", 5000);
-  } catch (e) { toast("Recording not supported on this browser: " + e.message, "err"); }
+    toast("⏺ Recording started — " + ((activeRecorder.mimeType || mime || "webm").includes("mp4") ? "MP4" : "WebM") + " on this device when you stop", "ok", 5000);
+  } catch (e) {
+    recorder = null;
+    try { recStream.getVideoTracks().forEach((t) => t.stop()); } catch {}
+    if (recRaf) { cancelAnimationFrame(recRaf); recRaf = null; }
+    recStream = null; recCanvas = null; recCtx = null;
+    stopCompositeLoopIfUnused();
+    releaseTeacherMicIfUnused();
+    toast("Recording not supported on this browser: " + e.message, "err");
+  }
+}
+function recCanvasCaptureSupported() {
+  try {
+    const c = document.createElement("canvas");
+    return typeof c.captureStream === "function" && typeof MediaStream !== "undefined";
+  } catch { return false; }
 }
 function stopRecording() {
-  try { recorder.stop(); } catch {}
+  const activeRecorder = recorder;
+  if (!activeRecorder) return;
+  try {
+    if (activeRecorder.state === "recording" || activeRecorder.state === "paused") activeRecorder.stop();
+  } catch {}
   try { if (recStream) recStream.getVideoTracks().forEach((t) => t.stop()); } catch {}
-  if (recRaf) { cancelAnimationFrame(recRaf); recRaf = null; }   /* v6 */
+  if (recRaf) { cancelAnimationFrame(recRaf); recRaf = null; }
+  recorder = null;
+  recStream = null;
+  stopCompositeLoopIfUnused();
+  releaseTeacherMicIfUnused();
   $("#btnRec").classList.remove("active");
   toast("🎬 Recording saved with YOUR brand. If your browser supports MP4 it saved .mp4; otherwise .webm.", "ok", 6000);
 }
-
 /* v4: teacher self-view — draggable anywhere + tap to cycle size
    (small → medium → large). In Meet/Zoom companion mode this floating
    camera is part of the shared screen, so students see your face. */
@@ -2069,9 +2182,9 @@ function setFocus(on) {
   /* v4 (issue 2): focus mode also enters browser fullscreen, which hides
      Chrome's address bar + title bar — the panes get the WHOLE device screen.
      (If installed as a PWA, there is no address bar at all.) */
-  if (on && !document.fullscreenElement) {
+  if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) {
     document.documentElement.requestFullscreen().catch(() => {});
-  } else if (!on && document.fullscreenElement) {
+  } else if (!on && document.fullscreenElement && document.exitFullscreen) {
     document.exitFullscreen().catch(() => {});
   }
   setTimeout(resizeBoards, 200);
@@ -2145,7 +2258,11 @@ if (Store.get("focus", false) && (meetMode || new URLSearchParams(location.searc
    Prepare boards before class, switch decks mid-lesson,
    export/import as .json to move between devices.
    ------------------------------------------------------------ */
-function lessonsAll() { return Store.get("lessons", {}); }
+function lessonsAll() {
+  const value = Store.get("lessons", {});
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([, lesson]) => lesson && typeof lesson === "object" && Array.isArray(lesson.pages)));
+}
 function mainBoard() {
   for (const side of ["L", "R"]) {
     const inst = paneState[side].instances.board;
@@ -2294,7 +2411,7 @@ $("#quizStart").addEventListener("click", () => {
     secondsPerQ: Math.max(5, Number($("#quizSecs").value) || 30),
     questions
   };
-  room.startQuiz(def);
+  if (!room.startQuiz(def)) { toast("No valid quiz questions found", "err"); return; }
   $("#quizSetup").classList.add("hide");
   $("#quizLive").classList.remove("hide");
   toast("🏆 Quiz started — " + questions.length + " question(s)", "ok");
@@ -2317,9 +2434,10 @@ $("#scoreReset").addEventListener("click", () => {
 });
 /* v6: gradebook export — per-student score CSV for records/parents */
 $("#scoreExport").addEventListener("click", () => {
-  if (!room) { toast("Go live first"); return; }
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) { toast("Go live first"); return; }
   const rows = [["Rank", "Student", "Score", "Room", "Date"]];
-  room.leaderboard().forEach((r, i) => rows.push([i + 1, r.name, r.score, room.code, new Date().toLocaleDateString()]));
+  dataRoom.leaderboard().forEach((r, i) => rows.push([i + 1, r.name, r.score, dataRoom.code, new Date().toLocaleDateString()]));
   const csv = rows.map((r) => r.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
   downloadBlob(new Blob([csv], { type: "text/csv" }), "HMG-scores-" + roomCode + "-" + Date.now() + ".csv");
   toast("📥 Scores exported", "ok");
@@ -2341,8 +2459,9 @@ function renderQuizProgress(p) {
 
 function renderLeaderboard() {
   const list = $("#leaderList");
-  if (!room) { list.innerHTML = '<p style="color:var(--text-dim);font-size:13px">Go live to see scores.</p>'; return; }
-  const rows = room.leaderboard();
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) { list.innerHTML = '<p style="color:var(--text-dim);font-size:13px">Go live to see scores.</p>'; return; }
+  const rows = dataRoom.leaderboard();
   if (!rows.length) { list.innerHTML = '<p style="color:var(--text-dim);font-size:13px">No students yet.</p>'; return; }
   list.innerHTML = rows.map((r, i) => `
     <div class="lead-row ${i === 0 ? "top1" : i === 1 ? "top2" : i === 2 ? "top3" : ""}">
@@ -2353,21 +2472,24 @@ function renderLeaderboard() {
 
 /* question banks (saved on device) */
 function refreshQuizBanks() {
-  const banks = Store.get("quizbanks", {});
+  const saved = Store.get("quizbanks", {});
+  const banks = saved && typeof saved === "object" && !Array.isArray(saved) ? Object.fromEntries(Object.entries(saved).filter(([, bank]) => bank && typeof bank === "object" && typeof bank.text === "string")) : {};
   const sel = $("#quizBankSel");
   sel.innerHTML = '<option value="">Load saved…</option>' +
     Object.keys(banks).map((n) => `<option>${escapeHtml(n)}</option>`).join("");
 }
 $("#quizSaveBank").addEventListener("click", () => {
   const name = $("#quizTitle").value.trim() || "Untitled quiz";
-  const banks = Store.get("quizbanks", {});
+  const saved = Store.get("quizbanks", {});
+  const banks = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
   banks[name] = { secs: $("#quizSecs").value, text: $("#quizText").value };
   Store.set("quizbanks", banks);
   refreshQuizBanks();
   toast("💾 Question bank saved: " + name, "ok");
 });
 $("#quizBankSel").addEventListener("change", (e) => {
-  const banks = Store.get("quizbanks", {});
+  const saved = Store.get("quizbanks", {});
+  const banks = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
   const b = banks[e.target.value];
   if (b) { $("#quizTitle").value = e.target.value; $("#quizSecs").value = b.secs; $("#quizText").value = b.text; }
 });
@@ -2607,28 +2729,34 @@ $("#calcClose").addEventListener("click", () => $("#calcBox").classList.add("hid
    v3.4 Class analytics report
    ------------------------------------------------------------ */
 function buildReport() {
-  if (!room) return "No class data — go live first.";
-  const s = room.stats;
-  const dur = s.start ? fmtTime((Date.now() - s.start) / 1000) : "—";
-  const lb = room.leaderboard();
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) return "No class data — go live first.";
+  const s = dataRoom.stats;
+  const endAt = room ? Date.now() : (s.end || Date.now());
+  const dur = s.start ? fmtTime((endAt - s.start) / 1000) : "—";
+  const lb = dataRoom.leaderboard();
   const lines = [
     "HMG ClassDeck — Class report",
     "Generated: " + nowStamp(),
-    "Room: " + room.code + (room.roomName ? "  (" + room.roomName + ")" : ""),
+    "Room: " + dataRoom.code + (dataRoom.roomName ? "  (" + dataRoom.roomName + ")" : ""),
     "",
     "Duration so far:      " + dur,
     "Total joins:          " + s.joins,
     "Peak attendance:      " + s.peak,
-    "Currently connected:  " + room.students.size,
+    "Currently connected:  " + dataRoom.students.size,
     "Chat messages (stu):  " + s.chats,
-    "Quizzes run:          " + s.quizzes.length +
+    "Polls run:             " + s.polls.length,
+    "Quizzes run:           " + s.quizzes.length +
       (s.quizzes.length ? "  [" + s.quizzes.map((q) => q.title + " → top: " + q.top).join("; ") + "]" : ""),
+    "Hands raised:          " + s.hands,
+    "Reactions:             " + s.reactions,
+    "Caption lines:         " + s.captions,
     "",
     "Leaderboard:",
     ...(lb.length ? lb.map((r, i) => "  " + (i + 1) + ". " + r.name + " — " + r.score + " pts") : ["  (no students)"]),
     "",
     "Attendance log:",
-    ...room.attendance.map((a) => "  " + a.time + "  " + a.event.toUpperCase().padEnd(6) + " " + a.name)
+    ...dataRoom.attendance.map((a) => "  " + a.time + "  " + a.event.toUpperCase().padEnd(6) + " " + a.name)
   ];
   return lines.join("\n");
 }
@@ -2640,16 +2768,19 @@ $("#reportDownload").addEventListener("click", () => {
   downloadBlob(new Blob([buildReport()], { type: "text/plain" }), "class-report-" + roomCode + "-" + Date.now() + ".txt");
 });
 function buildWhatsAppSummary() {
-  if (!room) return "No live class data yet.";
-  const s = room.stats;
-  const lb = room.leaderboard().slice(0, 5);
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) return "No live class data yet.";
+  const s = dataRoom.stats;
+  const lb = dataRoom.leaderboard().slice(0, 5);
+  const endAt = room ? Date.now() : (s.end || Date.now());
   return [
     "HMG ClassDeck class summary",
-    "Room: " + room.code,
-    room.roomName ? ("Class: " + room.roomName) : "",
-    "Duration: " + (s.start ? fmtTime((Date.now() - s.start) / 1000) : "—"),
+    "Room: " + dataRoom.code,
+    dataRoom.roomName ? ("Class: " + dataRoom.roomName) : "",
+    "Duration: " + (s.start ? fmtTime((endAt - s.start) / 1000) : "—"),
     "Total joins: " + s.joins,
     "Peak attendance: " + s.peak,
+    "Polls: " + s.polls.length + " · Hands raised: " + s.hands + " · Reactions: " + s.reactions,
     lb.length ? ("Top scores: " + lb.map((r, i) => (i + 1) + ". " + r.name + " (" + r.score + " pts)").join("; ")) : "Top scores: none yet",
     "Generated: " + nowStamp()
   ].filter(Boolean).join("\n");
@@ -2680,9 +2811,16 @@ $("#reportWhatsApp").addEventListener("click", () => {
     Store.set("brand", brand);
     const accent = $("#setAccent").value;
     Store.set("accent", accent);
-    if ($("#setSecureInvite")) Store.set("secure_invite", $("#setSecureInvite").checked);
+    const secureInvite = !!($("#setSecureInvite") && $("#setSecureInvite").checked);
+    if ($("#setSecureInvite")) Store.set("secure_invite", secureInvite);
     if ($("#setWatermark")) Store.set("security_watermark", $("#setWatermark").checked);
     if ($("#setAutoPiP")) Store.set("auto_pip_reminder", $("#setAutoPiP").checked);
+    // Apply changes immediately to a live room. Otherwise toggling the option
+    // could make the displayed link and the server-side gate disagree.
+    if (room) {
+      if (secureInvite && !room.inviteToken) room.inviteToken = rotateInviteToken();
+      if (!secureInvite) { room.inviteToken = ""; liveInviteToken = ""; }
+    }
     applyBranding();
   });
   $("#setAccentReset").addEventListener("click", () => { $("#setAccent").value = "#ffb347"; });
@@ -2703,9 +2841,11 @@ $("#reportWhatsApp").addEventListener("click", () => {
     if (!f) return;
     try {
       const obj = JSON.parse(await f.text());
-      if (!obj.data) throw new Error("not a ClassDeck backup");
+      if (!obj.data || typeof obj.data !== "object" || Array.isArray(obj.data)) throw new Error("not a ClassDeck backup");
+      const entries = Object.entries(obj.data).filter(([k, v]) => k.startsWith("hmgcd_") && typeof v === "string" && v.length <= 3_000_000);
+      if (!entries.length) throw new Error("backup contains no ClassDeck data");
       if (!confirm("Restore backup from " + (obj.when || "unknown date") + "? This overwrites current lessons/settings.")) return;
-      for (const [k, v] of Object.entries(obj.data)) localStorage.setItem(k, v);
+      for (const [k, v] of entries) localStorage.setItem(k, v);
       toast("✅ Backup restored — reloading…", "ok");
       setTimeout(() => location.reload(), 900);
     } catch (err) { toast("Restore failed: " + err.message, "err"); }
@@ -2713,7 +2853,8 @@ $("#reportWhatsApp").addEventListener("click", () => {
 })();
 
 function applyBranding() {
-  const accent = Store.get("accent", "#ffb347");
+  const candidate = String(Store.get("accent", "#ffb347"));
+  const accent = /^#[0-9a-f]{6}$/i.test(candidate) ? candidate : "#ffb347";
   document.documentElement.style.setProperty("--accent", accent);
 }
 applyBranding();
@@ -2729,11 +2870,11 @@ drawComposite = function () {
   const brand = Store.get("brand", "");
   if (brand && brand !== "HMG ACADEMY CLASS DECK") {
     const ctx = COMP.ctx;
-    ctx.fillStyle = "rgba(16,20,43,.78)";
+    ctx.font = "bold 13px system-ui, sans-serif";
     const w = ctx.measureText(brand).width + 26;
+    ctx.fillStyle = "rgba(16,20,43,.78)";
     ctx.fillRect(0, COMP.h - 30, w + 14, 30);
     ctx.fillStyle = "#ffb347";
-    ctx.font = "bold 13px system-ui, sans-serif";
     ctx.textBaseline = "middle";
     ctx.fillText(brand, 10, COMP.h - 15);
   }
@@ -2794,7 +2935,15 @@ function flyEmoji(emoji, name) {
   const el = document.createElement("div");
   el.style.cssText = "position:fixed;z-index:9998;font-size:34px;pointer-events:none;left:" +
     (12 + Math.random() * 70) + "%;bottom:70px;transition:all 2.6s ease-out;opacity:1";
-  el.innerHTML = emoji + (name ? '<div style="font-size:11px;text-align:center;color:#fff;text-shadow:0 1px 3px #000">' + escapeHtml(name) + "</div>" : "");
+  const symbol = document.createElement("span");
+  symbol.textContent = String(emoji || "").slice(0, 8);
+  el.appendChild(symbol);
+  if (name) {
+    const label = document.createElement("div");
+    label.style.cssText = "font-size:11px;text-align:center;color:#fff;text-shadow:0 1px 3px #000";
+    label.textContent = String(name).slice(0, 40);
+    el.appendChild(label);
+  }
   document.body.appendChild(el);
   requestAnimationFrame(() => { el.style.bottom = "75%"; el.style.opacity = "0"; });
   setTimeout(() => el.remove(), 2700);
@@ -2808,7 +2957,7 @@ onRoomEvent = function (type, p) {
     renderWaiting();
     refreshPendingBadge();
     if (!$("#drawerStudents").classList.contains("open")) toggleDrawer("#drawerStudents");
-    toast("🚪 " + p.name + " is waiting — admit them in the Students panel.", "", 7000);
+    toast("🚪 " + ((p && p.name) || "A student") + " is waiting — admit them in the Students panel.", "", 7000);
   }
   if (type === "reaction") flyEmoji(p.emoji, p.name);
   if (type === "student-joined" || type === "student-left") renderWaiting();
@@ -2953,11 +3102,17 @@ drawComposite = function () { _drawCompositeBeforeNoise(); if (noiseOn) drawNois
    This module publishes the ClassDeck composite MediaStream to a WebRTC WHIP
    relay (included in relay/no-obs-social-relay). The relay converts to RTMP.
    ------------------------------------------------------------ */
-let tabletLive = { pc: null, stream: null, resource: "", gateway: "", streamName: "classdeck", format: "landscape", raf: null, canvas: null };
+let tabletLive = { pc: null, stream: null, resource: "", gateway: "", streamName: "classdeck", format: "landscape", raf: null, canvas: null, ownsComposite: false };
 function tlSetStatus(msg, ok) {
   const el = $("#tlStatus"); if (el) { el.textContent = msg; el.style.color = ok ? "var(--ok)" : "var(--text-dim)"; }
 }
-function normaliseGateway(u) { return String(u || "").trim().replace(/\/+$/, ""); }
+function normaliseGateway(u) {
+  try {
+    const parsed = new URL(String(u || "").trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.href.replace(/\/+$/, "");
+  } catch { return ""; }
+}
 function tlLoadSettings() {
   const saved = Store.get("tablet_live", {});
   $("#tlGateway").value = saved.gateway || "";
@@ -2981,7 +3136,11 @@ function tlReadSettings() {
   return out;
 }
 function ensureCompositeForSocial() {
-  if (!COMP.raf) { drawComposite(); COMP.raf = requestAnimationFrame(compositeLoop); }
+  if (!COMP.raf) {
+    drawComposite();
+    COMP.raf = requestAnimationFrame(compositeLoop);
+    tabletLive.ownsComposite = true;
+  }
 }
 function createVerticalSocialStream(fps) {
   tabletLive.canvas = document.createElement("canvas");
@@ -3040,21 +3199,33 @@ function waitForIceComplete(pc) {
   });
 }
 async function publishWhip(stream, gateway, streamName) {
+  if (typeof RTCPeerConnection === "undefined") throw new Error("This browser does not support WebRTC relay publishing.");
   const endpoint = gateway + "/rtc/v1/whip/?app=live&stream=" + encodeURIComponent(streamName);
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-  await pc.setLocalDescription(await pc.createOffer());
-  await waitForIceComplete(pc);
-  const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
-  if (!res.ok) throw new Error("WHIP publish failed (" + res.status + "). Check relay HTTPS/CORS and SRS status.");
-  const answer = await res.text();
-  await pc.setRemoteDescription({ type: "answer", sdp: answer });
-  tabletLive.resource = res.headers.get("Location") || "";
-  return pc;
+  let pc = null;
+  try {
+    // Reuse the classroom ICE set, including TURN fallbacks, for restrictive
+    // mobile networks instead of relying on a single STUN server.
+    pc = new RTCPeerConnection(PEER_CONFIG.config);
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitForIceComplete(pc);
+    if (!pc.localDescription || !pc.localDescription.sdp) throw new Error("Could not create a relay offer.");
+    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
+    if (!res.ok) throw new Error("WHIP publish failed (" + res.status + "). Check relay HTTPS/CORS and SRS status.");
+    const answer = await res.text();
+    if (!answer.trim()) throw new Error("The relay returned an empty WebRTC answer.");
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    const location = res.headers.get("Location");
+    tabletLive.resource = location ? new URL(location, gateway).href : "";
+    return pc;
+  } catch (e) {
+    try { pc && pc.close(); } catch {}
+    throw e;
+  }
 }
 async function relayStart(settings) {
   const dest = Object.entries(settings.destinations || {}).map(([name, url]) => ({ name, publishUrl: url }));
-  if (!dest.length) return;
+  if (!dest.length) throw new Error("Add at least one social RTMP/RTMPS destination.");
   const res = await fetch(settings.gateway + "/api/start", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-relay-secret": settings.secret || "" },
@@ -3070,8 +3241,10 @@ async function relayStop() {
   } catch {}
 }
 async function startTabletSocialLive() {
+  if (typeof authEnforce === "function" && !authEnforce()) return;
   const settings = tlReadSettings();
-  if (!settings.gateway) { toast("Enter your relay gateway URL first", "err"); return; }
+  if (!settings.gateway) { toast("Enter a valid http(s) relay gateway URL first", "err"); return; }
+  if (!Object.keys(settings.destinations).length) { toast("Add at least one social RTMP/RTMPS destination first", "err"); return; }
   if (tabletLive.pc) { toast("Tablet social live is already running"); return; }
   try {
     tlSetStatus("Preparing ClassDeck stream from this tablet…");
@@ -3098,7 +3271,12 @@ async function stopTabletSocialLive(silent) {
   try { tabletLive.pc && tabletLive.pc.close(); } catch {}
   if (tabletLive.raf) cancelAnimationFrame(tabletLive.raf);
   try { tabletLive.stream && tabletLive.stream.getVideoTracks().forEach((t) => t.stop()); } catch {}
-  tabletLive = { pc: null, stream: null, resource: "", gateway: tabletLive.gateway, streamName: tabletLive.streamName, format: tabletLive.format, raf: null, canvas: null };
+  const ownedComposite = tabletLive.ownsComposite;
+  if (ownedComposite && !room && !recorder && !pipActive && !window._castStream && COMP.raf) {
+    cancelAnimationFrame(COMP.raf); COMP.raf = null;
+  }
+  tabletLive = { pc: null, stream: null, resource: "", gateway: tabletLive.gateway, streamName: tabletLive.streamName, format: tabletLive.format, raf: null, canvas: null, ownsComposite: false };
+  releaseTeacherMicIfUnused();
   $("#tlStart")?.classList.remove("active");
   tlSetStatus("Tablet Social Live stopped.");
   if (!silent) toast("📡 Tablet Social Live stopped");
@@ -3114,6 +3292,7 @@ async function checkRelayHealth() {
   } catch (e) { tlSetStatus("Relay not reachable: " + e.message); toast("Relay not reachable", "err"); }
 }
 async function tryFullTabletScreenShare() {
+  if (typeof authEnforce === "function" && !authEnforce()) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
     toast("This tablet/browser does not expose full Android screen capture to web apps. ClassDeck will still share the full ClassDeck teaching workspace directly.", "err", 9000);
     Store.set("broadcast", "composite");
@@ -3122,7 +3301,7 @@ async function tryFullTabletScreenShare() {
   try {
     const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: COMP.fps || 10 } }, audio: true });
     if (!room) { s.getTracks().forEach((t) => t.stop()); Store.set("broadcast", "screen"); toast("Full screen sharing is supported. Tap ▶ Go Live to choose your screen.", "ok", 7000); return; }
-    if (stageStream) stageStream.getVideoTracks().forEach((t) => t.stop());
+    stopStageSourceExceptMic(stageStream);
     stageStream = s;
     if (micStream) micStream.getAudioTracks().forEach((t) => stageStream.addTrack(t));
     room.setStageStream(stageStream);
@@ -3130,7 +3309,10 @@ async function tryFullTabletScreenShare() {
     s.getVideoTracks()[0].addEventListener("ended", () => { toast("Full screen share ended — switching back to ClassDeck workspace", "err"); startCompositeStage(); });
   } catch (e) { toast("Screen share cancelled/unavailable. Using ClassDeck workspace broadcast.", "err", 6000); }
 }
-if ($("#btnTabletLive")) $("#btnTabletLive").addEventListener("click", () => { tlLoadSettings(); openModal("#mTabletLive"); });
+if ($("#btnTabletLive")) $("#btnTabletLive").addEventListener("click", () => {
+  if (typeof authEnforce === "function" && !authEnforce()) return;
+  tlLoadSettings(); openModal("#mTabletLive");
+});
 if ($("#tlStart")) $("#tlStart").addEventListener("click", startTabletSocialLive);
 if ($("#tlStop")) $("#tlStop").addEventListener("click", () => stopTabletSocialLive(false));
 if ($("#tlHealth")) $("#tlHealth").addEventListener("click", checkRelayHealth);
@@ -3139,6 +3321,13 @@ if ($("#btnTryScreenShare")) $("#btnTryScreenShare").addEventListener("click", t
 
 /* Free speech-to-text captions: browser Web Speech API only (no paid AI/API). */
 let capRec = null, capOn = false, capLines = [];
+function releaseTeacherMicIfUnused() {
+  if (room || recorder || capOn || (tabletLive && tabletLive.pc)) return;
+  try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch {}
+  micStream = null;
+  micOn = false;
+  $("#btnMic")?.classList.remove("active");
+}
 function captionEngine() { return window.SpeechRecognition || window.webkitSpeechRecognition || null; }
 function captionLog(text, final) {
   const line = { time: nowStamp(), text: String(text || "").trim(), final: !!final };
@@ -3152,6 +3341,7 @@ function stopCaptions(silent) {
   const b = $("#btnCaptions"); if (b) { b.classList.remove("active"); b.textContent = "CC Live captions"; }
   if (!silent) toast("CC captions stopped");
   setCaptionStatus("Captions use your browser only; no AI/API key is used.");
+  releaseTeacherMicIfUnused();
 }
 function startCaptions() {
   const SR = captionEngine();
@@ -3200,7 +3390,8 @@ if ($("#btnTranscript")) $("#btnTranscript").addEventListener("click", () => {
 /* ------------------------------------------------------------
    ClassDesk v3: Enterprise security controls + Picture-in-Picture continuity
    ------------------------------------------------------------ */
-const securityAudit = Store.get("security_audit", []);
+const savedSecurityAudit = Store.get("security_audit", []);
+const securityAudit = Array.isArray(savedSecurityAudit) ? savedSecurityAudit.slice(-500) : [];
 function audit(event, detail) {
   const row = { time: nowStamp(), event, detail: String(detail || "").slice(0, 240), room: roomCode, device: Store.get("device_id", "") };
   securityAudit.push(row);
@@ -3248,6 +3439,7 @@ function startPipPump() {
 }
 function stopPipPumpIfSafe() { if (pipPump && !pipActive && !document.hidden) { clearInterval(pipPump); pipPump = null; } }
 async function enterClassDeckPiP() {
+  if (typeof authEnforce === "function" && !authEnforce()) return;
   if (!document.pictureInPictureEnabled) { toast("Picture-in-picture is not supported in this browser.", "err", 7000); return; }
   ensureCompositeForSocial && ensureCompositeForSocial();
   drawComposite();
@@ -3268,11 +3460,28 @@ async function enterClassDeckPiP() {
     toast("▣ PiP active — keep this small window open while switching/minimising.", "ok", 7000);
   } catch (e) { toast("PiP could not start: " + e.message, "err", 6000); }
 }
+function disposePipPreview() {
+  try { pipStream && pipStream.getTracks().forEach((t) => t.stop()); } catch {}
+  pipStream = null;
+  if (pipVideo) {
+    try { pipVideo.pause(); pipVideo.srcObject = null; } catch {}
+    pipVideo.remove();
+    pipVideo = null;
+  }
+  stopCompositeLoopIfUnused();
+}
 async function exitClassDeckPiP() {
-  try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); } catch {}
+  try { if (document.pictureInPictureElement && document.exitPictureInPicture) await document.exitPictureInPicture(); } catch {}
+  if (!document.pictureInPictureElement) disposePipPreview();
 }
 if ($("#btnPiP")) $("#btnPiP").addEventListener("click", () => document.pictureInPictureElement ? exitClassDeckPiP() : enterClassDeckPiP());
-document.addEventListener("leavepictureinpicture", () => { pipActive = false; $("#btnPiP")?.classList.remove("active"); stopPipPumpIfSafe(); audit("pip-stop", "PiP closed"); });
+document.addEventListener("leavepictureinpicture", () => {
+  pipActive = false;
+  $("#btnPiP")?.classList.remove("active");
+  stopPipPumpIfSafe();
+  disposePipPreview();
+  audit("pip-stop", "PiP closed");
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && (room || Store.get("wasLive", false))) {
     startPipPump();
@@ -3312,7 +3521,7 @@ document.addEventListener("keydown", (e) => {
 /* ------------------------------------------------------------
    v6 (issue 8): teacher licensing gate (SaaS)
    Students (join.html) are never gated. The Teacher Studio
-   checks: valid license → OK ; else 14-day trial → OK ;
+   checks: valid license → OK ; else 3-day trial → OK ;
    else locked until a key is activated. Keys are generated
    on admin.html by HMG ACADEMY after payment.
    ------------------------------------------------------------ */
@@ -3413,7 +3622,7 @@ $("#actStart").addEventListener("click", () => {
   let prompt = $("#actPrompt").value.trim();
   if (kind === "exit" && !prompt) prompt = "Before you go…";
   if (!prompt) { toast("Type a prompt", "err"); return; }
-  room.startActivity({ kind, prompt });
+  if (!room.startActivity({ kind, prompt })) { toast("Enter a valid activity prompt", "err"); return; }
   $("#actSetup").classList.add("hide");
   $("#actLive").classList.remove("hide");
   $("#actLiveTitle").textContent = ({ open: "💬 ", cloud: "☁ ", board: "🧱 ", exit: "🎟 " })[kind] + prompt;
@@ -3465,6 +3674,7 @@ const AWARDS = [
 ];
 
 function attachAwardButtons() {
+  if (!room) return;
   $$("#rosterList .stu-row").forEach((row) => {
     if (row.querySelector(".award-btn")) return;
     const name = row.querySelector(".name");
@@ -3478,9 +3688,7 @@ function attachAwardButtons() {
       b.addEventListener("click", (ev) => {
         ev.stopPropagation();
         if (!room) return;
-        for (const [pid, stu] of room.students) {
-          if (stu.name === name.textContent) { room.awardPoint(pid, cat, delta, emo); break; }
-        }
+        room.awardPoint(row.dataset.peerId, cat, delta, emo);
       });
       wrap.appendChild(b);
     });
@@ -3488,8 +3696,9 @@ function attachAwardButtons() {
   });
 }
 $("#btnBehaviorCSV").addEventListener("click", () => {
-  if (!room) { toast("Go live first"); return; }
-  downloadBlob(new Blob([room.behaviorCSV()], { type: "text/csv" }),
+  const dataRoom = room || lastEndedRoom;
+  if (!dataRoom) { toast("Go live first"); return; }
+  downloadBlob(new Blob([dataRoom.behaviorCSV()], { type: "text/csv" }),
     "behaviour-points-" + roomCode + "-" + Date.now() + ".csv");
 });
 
