@@ -1,8 +1,11 @@
 /* ============================================================
-   HMG ClassDeck — Service Worker
+   HMG ClassDeck — Service Worker v11.1.1
    Cache-first for the app shell so the studio opens instantly
    and works offline (live class still needs internet, but the
    whiteboard/PDF/notes work fully offline).
+   
+   NEW: Forces PWA install by returning index.html for navigation
+   requests, making the site feel native on repeat visits.
    Bump CACHE_VERSION whenever you deploy changes.
    ============================================================ */
 const CACHE_VERSION = "hmg-classdeck-v11.1.1-classdesk-v3";
@@ -18,6 +21,7 @@ const SHELL = [
   "./classroom.html",
   "./community.html",
   "./parent.html",
+  "./generate.html",
   "./404.html",
   "./css/style.css",
   "./js/common.js",
@@ -33,16 +37,19 @@ const SHELL = [
   "./js/security-config.js",
   "./js/auth.js",
   "./js/join.js",
+  "./js/enhancements.js",
+  "./js/generator.js",
   "./vendor/peerjs.min.js",
   "./vendor/pdf.min.js",
   "./vendor/pdf.worker.min.js",
   "./vendor/qrcode.min.js",
   "./assets/icon-96.png",
-  "./assets/hmg-academy-logo.png",
-  "./assets/founder-photo.jpg",
   "./assets/icon-192.png",
   "./assets/icon-512.png",
   "./assets/apple-touch-icon.png",
+  "./assets/hmg-academy-logo.png",
+  "./assets/founder-photo.jpg",
+  "./assets/icon-master.png",
   "./manifest.json",
   "./manifest.webmanifest",
   "./version.json",
@@ -71,27 +78,32 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
 
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then((hit) => {
-      if (hit) {
-        // refresh in background (stale-while-revalidate)
-        fetch(e.request).then((res) => {
-          if (res && res.ok) caches.open(CACHE_VERSION).then((c) => c.put(e.request, res));
-        }).catch(() => {});
-        return hit;
-      }
-      return fetch(e.request).then((res) => {
-        if (res && res.ok) {
-          const clone = res.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(e.request, clone));
-        }
+    (async () => {
+      const cache = await caches.open(CACHE_VERSION);
+      const cached = await cache.match(e.request, { ignoreSearch: true });
+      const fetchPromise = fetch(e.request).then(res => {
+        if (res && res.ok) cache.put(e.request, res.clone());
         return res;
-      }).catch(() => {
-        // Only navigation requests should fall back to the app shell. Returning
-        // index.html for a missing image/script masks real errors and can break
-        // browsers that expect the requested resource type.
-        if (e.request.mode === "navigate") return caches.match("./index.html");
+      }).catch(() => cached);
+
+      // Stale-while-revalidate: serve cached instantly, refresh in background
+      if (cached) {
+        fetch(e.request).then(res => {
+          if (res && res.ok) cache.put(e.request, res);
+        }).catch(() => {});
+        return cached;
+      }
+
+      try {
+        return await fetchPromise;
+      } catch (err) {
+        // For navigation requests, return index.html as offline fallback
+        if (e.request.mode === "navigate") {
+          const fallback = await cache.match("./index.html");
+          if (fallback) return fallback;
+        }
         return Response.error();
-      });
-    })
+      }
+    })()
   );
 });

@@ -9,6 +9,34 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
 <meta name="theme-color" content="#1e2a78" />
 <link rel="stylesheet" href="css/style.css" />
+<style>
+/* Force Install Banner */
+.install-banner {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 9997;
+  background: linear-gradient(135deg, #1e2a78, #4f6ef7);
+  color: #fff; padding: 14px 18px; display: flex; align-items: center;
+  gap: 12px; box-shadow: 0 -4px 20px rgba(0,0,0,.4);
+  animation: slideUp .35s ease; font-size: 14px;
+}
+.install-banner .install-content { display: flex; align-items: center; gap: 14px; flex: 1; flex-wrap: wrap; }
+.install-banner .install-icon { font-size: 28px; }
+.install-banner .install-text { flex: 1; min-width: 160px; }
+.install-banner .install-text strong { display: block; font-size: 15px; }
+.install-banner .install-text span { font-size: 12px; opacity: .85; }
+.install-banner .install-actions { display: flex; gap: 8px; }
+.install-banner .install-close { background: none; border: none; color: #fff; font-size: 22px; cursor: pointer; opacity: .6; padding: 0 4px; }
+.install-banner .install-close:hover { opacity: 1; }
+@keyframes slideUp { from { transform: translateY(100%) } to { transform: translateY(0) } }
+/* Recording overlay screen */
+.rec-dialog { position: fixed; inset: 0; z-index: 9995; background: rgba(5,8,22,.85); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.rec-dialog .rec-card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; width: min(540px, 96vw); max-height: 88vh; overflow-y: auto; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.rec-dialog .rec-card h3 { font-size: 18px; margin-bottom: 12px; }
+.rec-dialog .rec-card label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 3px; font-weight: 600; }
+.rec-dialog .rec-card .field { margin-bottom: 10px; }
+.rec-dialog .rec-card textarea.input { resize: vertical; min-height: 50px; }
+/* Companion badge */
+.badge.companion { background: #0b8043; color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 999px; }
+</style>
 </head>
 <body>
 <div class="studio">
@@ -868,7 +896,98 @@ Not sure</textarea>
   </div>
 </div>
 
-<!-- v6: recording setup (YouTube-ready branded video) -->
+<!-- HMG ENHANCED RECORDING SETUP (Staff, Lower Thirds, Ads, Intro) -->
+<div class="modal-back" id="mHmgRecSetup">
+  <div class="modal" style="max-width:620px">
+    <h3>🎬 HMG ClassDeck — Professional Recording Studio</h3>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:12px">Record YouTube-ready tutoring videos with your brand, staff credentials, scrolling lower thirds, and intermittent text ads. Each video opens with an intro and closes with an outro.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="field">
+        <label>Subject</label>
+        <input class="input hmgRecField" data-key="subject" placeholder="e.g. Mathematics" />
+      </div>
+      <div class="field">
+        <label>Topic</label>
+        <input class="input hmgRecField" data-key="topic" placeholder="e.g. Simultaneous Equations" />
+      </div>
+      <div class="field">
+        <label>Class / Level</label>
+        <input class="input hmgRecField" data-key="klass" placeholder="e.g. SS2" />
+      </div>
+      <div class="field">
+        <label>Brand Name</label>
+        <input class="input hmgRecField" data-key="brand" value="HMG ACADEMY CLASS DECK" />
+      </div>
+    </div>
+
+    <hr class="sep" />
+    <b style="font-size:13px">👨‍🏫 Staff Credentials (appears in intro + intermittent popups)</b>
+    <div class="field-row" style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="field">
+        <label>Your Name</label>
+        <input class="input hmgRecField" data-key="staffName" value="Adewale Adeagbo" />
+      </div>
+      <div class="field">
+        <label>Your Title</label>
+        <input class="input hmgRecField" data-key="staffTitle" value="Virtual Tutor | Data Scientist | AI-Augmented Solutions Developer" />
+      </div>
+    </div>
+
+    <hr class="sep" />
+    <b style="font-size:13px">📜 Lower Thirds — Scrolling Text Banner</b>
+    <div class="field" style="margin-top:6px">
+      <label>Text that scrolls at the bottom of the video</label>
+      <input class="input hmgRecField" data-key="lowerThird" value="If you want to book virtual classes with us, contact Adewale on 08100866322, 08094481488" />
+    </div>
+
+    <hr class="sep" />
+    <b style="font-size:13px">📢 Text Ad / Announcement Overlay</b>
+    <div class="field" style="margin-top:6px">
+      <label>Ad text (appears intermittently during the recording)</label>
+      <input class="input hmgRecField" data-key="adText" placeholder="e.g. Subscribe to our YouTube channel for more lessons!" />
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="field">
+        <label>Show ad every (seconds)</label>
+        <input class="input hmgRecField" data-key="adInterval" type="number" value="60" min="15" max="300" />
+      </div>
+      <div class="field">
+        <label>Show staff popup every (seconds)</label>
+        <input class="input hmgRecField" data-key="pulseInterval" type="number" value="30" min="10" max="120" />
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;margin:8px 0">
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
+        <input type="checkbox" id="hmgShowStaffPulse" checked /> Show staff credentials popup during recording
+      </label>
+    </div>
+
+    <div class="field">
+      <label>Footer credit line</label>
+      <input class="input hmgRecField" data-key="footer" value="Learning Deliberately. Teaching Authentically." />
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button class="btn small" id="hmgRecLogoBtn">🖼 Upload custom logo</button>
+      <input type="file" id="hmgRecLogoFile" class="hide" accept="image/*" />
+      <span id="hmgRecLogoStatus" style="font-size:12px;color:var(--text-dim)">Logo: HMG ACADEMY default</span>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim)">
+        <input type="checkbox" id="hmgRecIncludeCams" /> Include student cameras
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="hmgRecBegin">🎬 Start Recording with Branding</button>
+      <button class="btn" onclick="closeModal('#mHmgRecSetup')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- v6: recording setup (YouTube-ready branded video)
 <div class="modal-back" id="mRecSetup">
   <div class="modal">
     <h3>⏺ Record lesson (YouTube-ready)</h3>
@@ -1017,5 +1136,6 @@ Not sure</textarea>
 <script src="js/auth.js"></script>
 <script src="js/rtc.js"></script>
 <script src="js/teach.js"></script>
+<script src="js/enhancements.js"></script>
 </body>
 </html>

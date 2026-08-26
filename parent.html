@@ -113,7 +113,7 @@
                 return;
             }
             if (code !== 'PAR-8K2M') {
-                alert('This static demo cannot verify that code yet. Use PAR-8K2M for the sample report, or connect a real parent-data API.');
+                alert('⚠️ This static demo accepts only code PAR-8K2M for demonstration. In production, replace this hardcoded check with a secure backend API call. Student data must never be accessible via hardcoded codes.');
                 return;
             }
             document.getElementById('report-section').classList.remove('hidden');
