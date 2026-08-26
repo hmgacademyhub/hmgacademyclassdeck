@@ -13,7 +13,7 @@
   <img class="logo" src="assets/hmg-academy-logo.png" alt="" style="width:auto;max-width:220px;height:auto;border-radius:12px" />
   <h1>HMG <span>License Generator</span></h1>
   <p class="tag">Private admin tool — generate HMG ACCESS KEYS for paying teachers.
-  Keep this page's link to yourself (it is unlisted, and useless without your secret phrase).</p>
+  Keep this page private. The static browser generator is convenient for local use, but browser code can be inspected; use the optional Cloudflare Worker for production licensing.</p>
 
   <div class="card" style="width:min(520px,94vw);margin-top:22px">
     <label style="font-size:13px;color:var(--text-dim)">Your secret phrase (must match AUTH_SECRET in js/auth.js)</label>
@@ -45,19 +45,31 @@
 </div>
 <script src="js/common.js"></script>
 <script>
-async function sha256Hex(str){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("");}
+async function sha256Hex(str){
+  const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("");
+}
 document.getElementById("gGo").addEventListener("click", async () => {
   const sec = document.getElementById("gSecret").value;
   const name = document.getElementById("gName").value.trim();
-  const exp = document.getElementById("gYear").value + document.getElementById("gMonth").value;
-  if (!sec || !name) { document.getElementById("gOut").textContent = "Fill the secret and the name."; return; }
+  const year = Number(document.getElementById("gYear").value);
+  const month = document.getElementById("gMonth").value;
+  const out = document.getElementById("gOut");
+  out.replaceChildren();
+  if (!sec || name.length < 3) { out.textContent = "Fill the secret and the teacher's full name."; return; }
+  if (!Number.isInteger(year) || year < 2000 || year > 9999 || !/^\d{2}$/.test(month)) {
+    out.textContent = "Enter a valid expiry year and month."; return;
+  }
+  const exp = String(year) + month;
   const sig = (await sha256Hex(sec + "|" + name.toLowerCase() + "|" + exp)).slice(0,10).toUpperCase();
   const key = "HMG-" + exp + "-" + sig;
-  document.getElementById("gOut").innerHTML =
-    '<b style="color:var(--accent)">' + key + '</b><br/>' +
-    '<span style="font-size:12.5px;color:var(--text-dim)">Send to: ' + name +
-    ' — valid until end of ' + exp.slice(0,4) + '-' + exp.slice(4) + '. ' +
-    'They activate with this exact name.</span>';
+  const strong = document.createElement("b");
+  strong.style.color = "var(--accent)";
+  strong.textContent = key;
+  const detail = document.createElement("span");
+  detail.style.cssText = "font-size:12.5px;color:var(--text-dim)";
+  detail.textContent = "Send to: " + name + " — valid until end of " + exp.slice(0,4) + "-" + exp.slice(4) + ". They activate with this exact name.";
+  out.append(strong, document.createElement("br"), detail);
 });
 </script>
 </body>

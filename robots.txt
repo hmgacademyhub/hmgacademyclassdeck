@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /admin.html
 Disallow: /revoked.json
-Sitemap: https://hmgacademyhub.github.io/hmgacademyclassdeck/sitemap.xml
+Sitemap: https://hmgacademyclassdeck.vercel.app/sitemap.xml

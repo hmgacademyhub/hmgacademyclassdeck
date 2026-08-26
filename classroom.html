@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
-        body { font-family: 'Inter', system_ui, sans-serif; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
         .command-header { background: #0f172a; }
     </style>
 </head>
@@ -178,6 +178,7 @@
             link.href = URL.createObjectURL(blob);
             link.download = 'attendance.csv';
             link.click();
+            setTimeout(() => URL.revokeObjectURL(link.href), 1500);
         }
         
         function addBehaviour() {
@@ -225,15 +226,18 @@
         
         function postToWall() {
             const text = prompt('Post to class wall:');
-            if (text) {
+            if (text && text.trim()) {
                 const wall = document.getElementById('class-wall');
-                wall.innerHTML += `<div class="px-2 py-1 bg-slate-50 rounded-xl mt-1">Teacher: ${text}</div>`;
+                const post = document.createElement('div');
+                post.className = 'px-2 py-1 bg-slate-50 rounded-xl mt-1';
+                post.textContent = 'Teacher: ' + text.trim().slice(0, 500);
+                wall.appendChild(post);
             }
         }
         
         function broadcastToParents() {
-            alert('Weekly report broadcasted to all parents via WhatsApp.');
-            window.open('https://wa.me/?text=Weekly%20report%20for%20JSS2%20Maths%20is%20ready.', '_blank');
+            alert('Opening WhatsApp with a weekly-report message. You must review and send it yourself.');
+            window.open('https://wa.me/?text=Weekly%20report%20for%20JSS2%20Maths%20is%20ready.', '_blank', 'noopener,noreferrer');
         }
         
         function endClass() {

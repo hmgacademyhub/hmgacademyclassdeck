@@ -1,7 +1,7 @@
 {
   "name": "HMG ACADEMY CLASS DECK v3",
   "short_name": "ClassDeck",
-  "description": "Teach online like a pro — from any tablet or phone. 200+ tools. Free, offline, Nigerian curriculum.",
+  "description": "Teach online like a pro — from any tablet or phone. 200+ teaching tools. Free, offline, Nigerian curriculum.",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0A3D62",
@@ -16,14 +16,6 @@
       "src": "assets/icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
-    }
-  ],
-  "screenshots": [
-    {
-      "src": "assets/screenshot1.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide"
     }
   ]
 }

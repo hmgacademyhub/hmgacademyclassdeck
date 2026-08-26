@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
-        body { font-family: 'Inter', system_ui, sans-serif; }
+        body { font-family: 'Inter', system-ui, sans-serif; }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -23,6 +23,7 @@
             
             <div class="text-sm">
                 <div class="font-extrabold text-base">View your child's weekly progress, portfolio, and badges.</div>
+                <div class="mt-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800"><b>Static demo:</b> this repository has no parent-data backend. The sample report opens only with the demo code <b>PAR-8K2M</b>; connect a real authenticated API before production use.</div>
                 
                 <div class="mt-5">
                     <label class="text-xs font-bold">Parent code (from teacher)</label>
@@ -106,12 +107,15 @@
     
     <script>
         function viewReport() {
-            const code = document.getElementById('parent-code').value;
-            if (code.length < 3) {
-                alert('Please enter a valid parent code');
+            const code = document.getElementById('parent-code').value.trim().toUpperCase();
+            if (!/^PAR-[A-Z0-9]{4,12}$/.test(code)) {
+                alert('Enter a parent code in the format PAR-8K2M.');
                 return;
             }
-            
+            if (code !== 'PAR-8K2M') {
+                alert('This static demo cannot verify that code yet. Use PAR-8K2M for the sample report, or connect a real parent-data API.');
+                return;
+            }
             document.getElementById('report-section').classList.remove('hidden');
             document.getElementById('report-section').scrollIntoView({behavior: 'smooth'});
         }
@@ -121,7 +125,7 @@
         }
         
         function requestWhatsApp() {
-            window.open('https://wa.me/2348100866322?text=Hi%20teacher%2C%20this%20is%20a%20parent%20of%20Chioma%20Eze%20(JSS2).', '_blank');
+            window.open('https://wa.me/2348100866322?text=Hi%20teacher%2C%20this%20is%20a%20parent%20of%20Chioma%20Eze%20(JSS2).', '_blank', 'noopener,noreferrer');
         }
         
         // Preload demo
