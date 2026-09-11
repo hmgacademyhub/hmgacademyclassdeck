@@ -8,7 +8,7 @@
    requests, making the site feel native on repeat visits.
    Bump CACHE_VERSION whenever you deploy changes.
    ============================================================ */
-const CACHE_VERSION = "hmg-classdeck-v12.0.0-standalone-merge";   /* bumped: V12 — enhanced engine merged, standalone auth restored */
+const CACHE_VERSION = "hmg-classdeck-v12.1.0-generator-fix";   /* bumped: V12.1 — generator template resolution + brand cascade fix */
 
 const SHELL = [
   "./",

@@ -14,34 +14,59 @@ const CDGenerator = {
   _cache: {},
   _binCache: {},
 
+  /* V12.1 TEMPLATE RESOLUTION FIX ------------------------------------
+     The generator can run in TWO deployments:
+       1) The standalone CLASS DECK GENERATOR site — the builder is the
+          homepage and the master deck lives under /template/.
+       2) Inside a deployed Class Deck (its /generate.html page) — the
+          deck files live at the site root, there is no /template/.
+     CONFIRMED BUG: the engine previously fetched template files only
+     from the current root. Deploying the "generator" therefore required
+     shipping the whole deck AT the root, which made the generator site
+     byte-identical to the deck site. Now every template fetch tries
+     template/<path> FIRST and falls back to <path>, so one engine works
+     in both deployments and the generator site can lead with the
+     builder UI. A response is rejected if it is actually a 404 page. */
+  _tplRoots: ['template/', ''],
+
+  _looks404(text) {
+    const head = String(text).slice(0, 400).toLowerCase();
+    return head.includes('<!doctype html') && (head.includes('404') || head.includes('not found'));
+  },
+
   async loadFile(path) {
     if (CDGenerator._cache[path]) return CDGenerator._cache[path];
-    try {
-      const res = await fetch(path, { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + path);
-      const text = await res.text();
-      CDGenerator._cache[path] = text;
-      return text;
-    } catch (e) {
-      console.warn('[CDGen] Failed to load:', path, e.message);
-      return '';
+    for (const root of CDGenerator._tplRoots) {
+      try {
+        const res = await fetch(root + path, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const text = await res.text();
+        /* Guard: an SPA-style host may answer 200 with an error page.
+           Only accept it if the extension plausibly matches the content. */
+        if (!/\.html?$/i.test(path) && CDGenerator._looks404(text)) continue;
+        CDGenerator._cache[path] = text;
+        return text;
+      } catch (e) { /* try next root */ }
     }
+    console.warn('[CDGen] Failed to load:', path);
+    return '';
   },
 
   async loadBinary(path) {
     if (CDGenerator._binCache[path]) return CDGenerator._binCache[path];
-    try {
-      const res = await fetch(path, { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + path);
-      const data = new Uint8Array(await res.arrayBuffer());
-      const prefix = new TextDecoder().decode(data.slice(0, 400));
-      if (prefix.toLowerCase().includes('<!doctype html') && prefix.includes('404')) return null;
-      CDGenerator._binCache[path] = data;
-      return data;
-    } catch (e) {
-      console.warn('[CDGen] Binary load failed:', path, e.message);
-      return null;
+    for (const root of CDGenerator._tplRoots) {
+      try {
+        const res = await fetch(root + path, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = new Uint8Array(await res.arrayBuffer());
+        const prefix = new TextDecoder().decode(data.slice(0, 400));
+        if (prefix.toLowerCase().includes('<!doctype html') && prefix.includes('404')) continue;
+        CDGenerator._binCache[path] = data;
+        return data;
+      } catch (e) { /* try next root */ }
     }
+    console.warn('[CDGen] Binary load failed:', path);
+    return null;
   },
 
   esc(s) {
@@ -330,24 +355,39 @@ Built by HMG Concepts · ${cfg.hmgLink}
      ------------------------------------------------------------ */
   _brand(path, content, cfg) {
     let html = content;
-    const reps = {
-      'HMG ACADEMY CLASS DECK': cfg.brandName,
-      'HMG ACADEMY': cfg.shortName,
-      'HMG ClassDeck': cfg.shortName || 'ClassDeck',
-      'CLASS DECK': (cfg.shortName || 'CLASS DECK').toUpperCase(),
-      'ClassDeck': cfg.shortName || 'ClassDeck',
-      'hmg-academy-logo.png': 'brand-logo.' + cfg.logoExt,
-      'hmgacademyclassdeck.vercel.app': cfg.siteUrl || 'classdeck.example.com',
-      'hmgacademy.pages.dev': String(cfg.hmgLink).replace(/https?:\/\//, ''),
-      '#1e2a78': cfg.primaryColor,
-      '#ffb347': cfg.accentColor,
-      '#10142b': cfg.bgColor,
-      '#0a3d62': cfg.bgColor,
-      'Adewale Samson Adeagbo': cfg.developer
-    };
-    for (const [from, to] of Object.entries(reps)) {
-      html = html.split(from).join(to);
-    }
+    /* V12.1 CASCADE FIX ------------------------------------------------
+       CONFIRMED BUG: replacements ran sequentially on live text, so a
+       client value containing a LATER search token was re-processed.
+       Example: 'HMG ACADEMY CLASS DECK' → 'SUNRISE TUTORS CLASS DECK',
+       then the 'CLASS DECK' rule mangled it to 'SUNRISE TUTORS SUNRISE
+       DECK'. Two-phase replacement fixes this for every possible client
+       name: phase 1 swaps each template token (longest first) for a
+       unique sentinel that can never appear in HTML/JS; phase 2 swaps
+       sentinels for the final client values. Client values are never
+       rescanned. */
+    const reps = [
+      ['HMG ACADEMY CLASS DECK', cfg.brandName],
+      ['HMG ACADEMY', cfg.shortName],
+      ['HMG ClassDeck', cfg.shortName || 'ClassDeck'],
+      ['CLASS DECK', (cfg.shortName || 'CLASS DECK').toUpperCase()],
+      ['ClassDeck', cfg.shortName || 'ClassDeck'],
+      ['hmg-academy-logo.png', 'brand-logo.' + cfg.logoExt],
+      ['hmgacademyclassdeck.vercel.app', cfg.siteUrl ? String(cfg.siteUrl).replace(/^https?:\/\//, '').replace(/\/$/, '') : 'classdeck.example.com'],
+      ['hmgacademy.pages.dev', String(cfg.hmgLink).replace(/https?:\/\//, '').replace(/\/$/, '')],
+      ['#1e2a78', cfg.primaryColor],
+      ['#ffb347', cfg.accentColor],
+      ['#10142b', cfg.bgColor],
+      ['#0a3d62', cfg.bgColor],
+      ['Adewale Samson Adeagbo', cfg.developer]
+    ];
+    /* Phase 1: tokens → sentinels (order matters: longest/most specific first) */
+    reps.forEach(function (r, i) {
+      html = html.split(r[0]).join('\u0001CDG' + i + '\u0002');
+    });
+    /* Phase 2: sentinels → client values (never rescanned) */
+    reps.forEach(function (r, i) {
+      html = html.split('\u0001CDG' + i + '\u0002').join(r[1] == null ? '' : String(r[1]));
+    });
     /* config.js / license.js references */
     html = html.replace('</head>', '<style>:root{--brand: ' + cfg.primaryColor + ';--accent: ' + cfg.accentColor + ';--bg: ' + cfg.bgColor + '}</style>\n</head>');
     return html;
