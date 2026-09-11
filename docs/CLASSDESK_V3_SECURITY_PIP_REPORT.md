@@ -157,7 +157,7 @@ What it does:
 - Opens it in browser Picture-in-Picture mode where supported.
 - Keeps a small floating preview visible when the teacher switches apps/minimises.
 - Starts a background composite pump to reduce canvas freezing while PiP is active.
-- Adds Media Session metadata for HMG ClassDeck.
+- Adds Media Session metadata for HMG ACADEMY CLASS DECK.
 
 Important limitation:
 

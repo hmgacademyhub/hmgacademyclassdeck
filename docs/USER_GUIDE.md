@@ -149,7 +149,7 @@ and your boards are exactly where you left them (autosave).
 
 ---
 
-*HMG Academy — hmgacademy.pages.dev*
+*HMG ACADEMY — hmgacademyclassdeck.vercel.app*
 
 ---
 

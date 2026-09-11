@@ -1,8 +1,8 @@
 /* ==========================================================================
-   HMG ClassDeck v3 ENTERPRISE ENHANCEMENTS
+   HMG ACADEMY CLASS DECK v3 ENTERPRISE ENHANCEMENTS
    • Crash-safe recording (auto-saves on unexpected close)
    • Simultaneous recording + live streaming
-   • HMG Academy branded intro/outro for recorded videos
+   • HMG ACADEMY branded intro/outro for recorded videos
    • Lower thirds banner with scrolling text ads
    • Staff credentials overlay (name, title, intermittent popup)
    • 1000+ student scalability via relay mode
@@ -70,7 +70,7 @@ const CDCrashSafe = {
       const tx = db.transaction(this.storeName, 'readwrite');
       const store = tx.objectStore(this.storeName);
       const all = await new Promise(r => { const q = store.getAll(); q.onsuccess = () => r(q.result); });
-      all.filter(r => r.sessionId === sessionId).forEach(r => store.delete(r.id));
+      all.filter(r => sessionId === 'all' || r.sessionId === sessionId).forEach(r => store.delete(r.id));
       await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = reject; });
     } catch {}
   },
@@ -146,10 +146,16 @@ const HMGREC = {
   },
 
   _loadLogo() {
-    const data = Store.get('hmg_rec_logo', null);
+    const data = Store.get('hmg_rec_logo', null) || Store.get('rec_logo', null);
     this.meta.brandLogo = new Image();
     if (data) { this.meta.brandLogo.src = data; }
-    else { this.meta.brandLogo.src = 'assets/hmg-academy-logo.png'; }
+    else { this.meta.brandLogo.src = "../assets/img/logo.png";
+      this.meta.brandLogo.onerror = () => { this.meta.brandLogo.src = "assets/icon-192.png"; }; }
+      
+    // LOAD TEACHER PHOTO
+    const photoData = Store.get('hmg_rec_photo', null);
+    this.meta.teacherPhoto = new Image();
+    if(photoData) this.meta.teacherPhoto.src = photoData;
   },
 
   setLogo(file) {
@@ -161,137 +167,269 @@ const HMGREC = {
   },
 
   /** Draw the intro frame on a canvas */
-  drawIntroFrame(canvas, ctx, W, H) {
-    ctx.fillStyle = '#10142b';
+  drawIntroFrame(canvas, ctx, W, H, elapsed = 0) {
+    ctx.globalAlpha = 1.0;
+    const duration = 15000;
+    const t = Math.min(1, Math.max(0, elapsed / duration));
+    
+    // Background - Deep Royal Blue gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+    bgGrad.addColorStop(0, '#0a0f25');
+    bgGrad.addColorStop(1, '#1a2352');
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
 
-    // Brand gradient header
-    const grad = ctx.createLinearGradient(0, 0, W, 0);
-    grad.addColorStop(0, '#1e2a78');
-    grad.addColorStop(0.5, '#4f6ef7');
-    grad.addColorStop(1, '#1e2a78');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H * 0.18);
+    // Dynamic grid overlay for tech/modern feel
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<W; i+=60) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke(); }
+    for(let i=0; i<H; i+=60) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke(); }
 
-    // Logo
-    if (this.meta.brandLogo && this.meta.brandLogo.complete && this.meta.brandLogo.naturalWidth) {
-      const lw = Math.min(W * 0.2, 160);
-      const lh = lw * (this.meta.brandLogo.naturalHeight / this.meta.brandLogo.naturalWidth);
-      ctx.drawImage(this.meta.brandLogo, (W - lw) / 2, H * 0.03, lw, lh);
+    ctx.save();
+    
+    // Scene 1: Logo & Brand (0 to 45%)
+    // Scene 2: Topic & Details (45% to 100%)
+    
+    let alpha1 = 0, yOffset1 = 50, scale1 = 0.8;
+    let alpha2 = 0, xOffset2 = -50;
+
+    if (t < 0.45) {
+      const localT = Math.min(1, t / 0.15);
+      alpha1 = localT;
+      yOffset1 = 50 * (1 - localT);
+      scale1 = 0.8 + 0.2 * localT;
+      
+      // Fade out
+      if (t > 0.35) {
+         alpha1 = 1 - (t - 0.35) / 0.1;
+      }
     } else {
-      ctx.fillStyle = '#ffb347';
+      const localT = Math.min(1, (t - 0.45) / 0.15);
+      alpha2 = localT;
+      xOffset2 = -50 * (1 - localT);
+      if (t > 0.9) {
+         alpha2 = 1 - (t - 0.9) / 0.1;
+      }
+    }
+
+    // --- SCENE 1 ---
+    if (alpha1 > 0) {
+      ctx.globalAlpha = alpha1;
+      ctx.translate(W/2, H/2);
+      ctx.scale(scale1, scale1);
+      ctx.translate(-W/2, -H/2);
+      
+      let logoBottom = H * 0.4;
+      if (this.meta.brandLogo && this.meta.brandLogo.complete && this.meta.brandLogo.naturalWidth) {
+        const lw = Math.min(W * 0.25, 200);
+        const lh = lw * (this.meta.brandLogo.naturalHeight / this.meta.brandLogo.naturalWidth);
+        ctx.drawImage(this.meta.brandLogo, (W - lw) / 2, H * 0.3 - lh/2 + yOffset1, lw, lh);
+        logoBottom = H * 0.3 + lh/2 + 20;
+      } else {
+        ctx.fillStyle = '#ffb347';
+        ctx.font = 'bold ' + Math.round(H * 0.1) + 'px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('🎓', W / 2, H * 0.3 + yOffset1);
+        logoBottom = H * 0.3 + 40;
+      }
+      
+      ctx.fillStyle = '#ffffff';
       ctx.font = 'bold ' + Math.round(H * 0.08) + 'px system-ui';
       ctx.textAlign = 'center';
-      ctx.fillText('🎓', W / 2, H * 0.12);
+      ctx.fillText(this.meta.brand || 'HMG ACADEMY', W / 2, logoBottom + 40 + yOffset1);
+      
+      ctx.fillStyle = '#ffb347';
+      ctx.font = 'bold ' + Math.round(H * 0.035) + 'px system-ui';
+      ctx.fillText(this.meta.footer || 'Learning Deliberately.', W / 2, logoBottom + 90 + yOffset1);
     }
 
-    // Brand name
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold ' + Math.round(H * 0.055) + 'px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText(this.meta.brand, W / 2, H * 0.22);
+    // --- SCENE 2 ---
+    ctx.restore(); // restore from scene 1
+    ctx.save();    // save for scene 2
+    if (alpha2 > 0) {
+      
+      ctx.globalAlpha = alpha2;
+      
+      // Decorative Left Accent Line
+      ctx.fillStyle = '#ffb347';
+      ctx.fillRect(W * 0.15 + xOffset2, H * 0.25, 8, H * 0.5);
 
-    // Motto
-    ctx.fillStyle = '#9aa3cf';
-    ctx.font = Math.round(H * 0.028) + 'px system-ui';
-    ctx.fillText('Learning Deliberately. Teaching Authentically.', W / 2, H * 0.28);
+      ctx.textAlign = 'left';
+      
+      ctx.fillStyle = '#ffb347';
+      ctx.font = 'bold ' + Math.round(H * 0.035) + 'px system-ui';
+      ctx.fillText('TODAY\'S LESSON', W * 0.18 + xOffset2, H * 0.32);
 
-    // Staff name
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold ' + Math.round(H * 0.038) + 'px system-ui';
-    ctx.fillText(this.meta.staffName, W / 2, H * 0.40);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold ' + Math.round(H * 0.075) + 'px system-ui';
+      const subj = (this.meta.subject || 'Academic Tutoring');
+      ctx.fillText(subj, W * 0.18 + xOffset2, H * 0.42);
 
-    // Staff title
-    ctx.fillStyle = '#ffb347';
-    ctx.font = Math.round(H * 0.024) + 'px system-ui';
-    ctx.fillText(this.meta.staffTitle, W / 2, H * 0.46);
+      if (this.meta.topic) {
+        ctx.fillStyle = '#eef1ff';
+        ctx.font = Math.round(H * 0.045) + 'px system-ui';
+        ctx.fillText(this.meta.topic, W * 0.18 + xOffset2, H * 0.50);
+      }
 
-    // Subject & Topic
-    ctx.fillStyle = '#eef1ff';
-    ctx.font = 'bold ' + Math.round(H * 0.028) + 'px system-ui';
-    const subjLine = (this.meta.subject || 'Academic Tutoring') + (this.meta.topic ? ' — ' + this.meta.topic : '');
-    ctx.fillText(subjLine, W / 2, H * 0.55);
-
-    // Class
-    if (this.meta.klass) {
       ctx.fillStyle = '#9aa3cf';
-      ctx.font = Math.round(H * 0.024) + 'px system-ui';
-      ctx.fillText('Class: ' + this.meta.klass, W / 2, H * 0.61);
+      ctx.font = 'bold ' + Math.round(H * 0.03) + 'px system-ui';
+      ctx.fillText('INSTRUCTOR', W * 0.18 + xOffset2, H * 0.65);
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold ' + Math.round(H * 0.05) + 'px system-ui';
+      ctx.fillText(this.meta.staffName || 'Adewale Adeagbo', W * 0.18 + xOffset2, H * 0.72);
+
+      ctx.fillStyle = '#4f6ef7';
+      ctx.font = Math.round(H * 0.03) + 'px system-ui';
+      ctx.fillText(this.meta.staffTitle || 'Professional Tutor', W * 0.18 + xOffset2, H * 0.78);
+
+      // ----------------------------------------------------
+      // MASSIVE TEACHER PHOTO ON THE RIGHT SIDE
+      // ----------------------------------------------------
+      const photoSize = Math.round(H * 0.50); // Massive size (half the screen height)
+      const photoX = W * 0.70 - (photoSize/2) - (xOffset2 * 1.5); // Slides in gracefully from the right
+      const photoY = H * 0.50 - (photoSize/2); // Perfectly centered vertically against the text block
+      
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(photoX + photoSize/2, photoY + photoSize/2, photoSize/2, 0, Math.PI * 2);
+      
+      // Thick, bold glowing border to make it pop
+      ctx.lineWidth = Math.round(H * 0.015);
+      ctx.strokeStyle = '#ffb347';
+      ctx.stroke();
+      ctx.clip();
+      
+      if (this.meta.teacherPhoto && this.meta.teacherPhoto.complete && this.meta.teacherPhoto.naturalWidth) {
+         ctx.drawImage(this.meta.teacherPhoto, photoX, photoY, photoSize, photoSize);
+      } else {
+         ctx.fillStyle = '#4f6ef7';
+         ctx.fillRect(photoX, photoY, photoSize, photoSize);
+         ctx.fillStyle = '#fff';
+         ctx.font = 'bold ' + Math.round(photoSize * 0.6) + 'px system-ui';
+         ctx.textAlign = 'center';
+         ctx.textBaseline = 'middle';
+         ctx.fillText((this.meta.staffName || 'A').charAt(0).toUpperCase(), photoX + photoSize/2, photoY + photoSize/2 + (photoSize * 0.05));
+      }
+      ctx.restore();
     }
-
-    // Decorative line
-    ctx.strokeStyle = '#ffb347';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(W * 0.2, H * 0.67);
-    ctx.lineTo(W * 0.8, H * 0.67);
-    ctx.stroke();
-
-    // Footer
-    ctx.fillStyle = '#9aa3cf';
-    ctx.font = Math.round(H * 0.02) + 'px system-ui';
-    ctx.fillText(this.meta.footer || 'HMG ACADEMY', W / 2, H * 0.74);
-
-    // HMG ecosystem
-    ctx.fillStyle = '#6b7591';
-    ctx.font = Math.round(H * 0.016) + 'px system-ui';
-    ctx.fillText('HMG Concepts · HMG Academy · HMG Technologies · HMG Media · HMG Gospel', W / 2, H * 0.80);
-
-    // Bottom bar
-    ctx.fillStyle = 'rgba(16,20,43,.9)';
-    ctx.fillRect(0, H * 0.88, W, H * 0.12);
-    ctx.fillStyle = '#ffb347';
-    ctx.font = 'bold ' + Math.round(H * 0.022) + 'px system-ui';
-    ctx.fillText('✦ Recording in progress ✦', W / 2, H * 0.94);
+    ctx.restore(); // restore from scene 2 to prevent globalAlpha leakage into the main video
   },
 
   /** Draw the outro frame */
-  drawOutroFrame(canvas, ctx, W, H) {
-    ctx.fillStyle = '#10142b';
+  drawOutroFrame(canvas, ctx, W, H, elapsed = 0) {
+    ctx.globalAlpha = 1.0;
+    const duration = 15000; 
+    const t = Math.min(1, Math.max(0, elapsed / duration));
+    
+    // Background - Deep Royal Blue gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, W, H);
+    bgGrad.addColorStop(0, '#0a0f25');
+    bgGrad.addColorStop(1, '#1a2352');
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
+    
+    // Grid
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<W; i+=60) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke(); }
+    for(let i=0; i<H; i+=60) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke(); }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold ' + Math.round(H * 0.045) + 'px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText('Thank you for watching!', W / 2, H * 0.25);
+    ctx.save();
+    
+    let hasFlyer = false;
+    let flyerImg = null;
+    if (window.HMGFlyer) {
+       flyerImg = window.HMGFlyer.get && window.HMGFlyer.get();
+       if (flyerImg && flyerImg.naturalWidth) hasFlyer = true;
+    }
 
-    ctx.fillStyle = '#ffb347';
-    ctx.font = 'bold ' + Math.round(H * 0.035) + 'px system-ui';
-    ctx.fillText(this.meta.brand, W / 2, H * 0.34);
+    // SCENE 1: Flyer (0-4 seconds) IF it exists
+    // SCENE 2: CTA & Details (4-7 seconds, or 0-7 if no flyer)
+    let flyerAlpha = 0;
+    let ctaAlpha = 0;
+    let yOffset = 0;
+    
+    // 0-7s Flyer (t < 0.466), 7-15s CTA (t >= 0.466)
+    if (hasFlyer) {
+       if (t < 0.466) {
+          // Fade in (0 to 0.05) and fade out (0.416 to 0.466)
+          flyerAlpha = Math.min(1, t / 0.05);
+          if (t > 0.416) flyerAlpha = 1 - (t - 0.416) / 0.05;
+       } else {
+          ctaAlpha = Math.min(1, (t - 0.466) / 0.05);
+          yOffset = 30 * (1 - ctaAlpha);
+       }
+    } else {
+       ctaAlpha = Math.min(1, t / 0.1);
+       yOffset = 30 * (1 - ctaAlpha);
+    }
 
-    ctx.fillStyle = '#9aa3cf';
-    ctx.font = Math.round(H * 0.022) + 'px system-ui';
-    ctx.fillText(this.meta.footer || 'Learning Deliberately. Teaching Authentically.', W / 2, H * 0.40);
+    // DRAW FLYER SCENE
+    if (flyerAlpha > 0 && hasFlyer) {
+       ctx.save();
+       ctx.globalAlpha = flyerAlpha;
+       const s = Math.min(W/flyerImg.naturalWidth, H/flyerImg.naturalHeight) * 0.95;
+       // zoom from 1 to 1.15 over the 7 seconds (t goes from 0 to 0.466)
+       const zoom = 1 + ((t / 0.466) * 0.15);
+       ctx.translate(W/2, H/2);
+       ctx.scale(zoom, zoom);
+       ctx.translate(-W/2, -H/2);
+       ctx.drawImage(flyerImg, (W-flyerImg.naturalWidth*s)/2, (H-flyerImg.naturalHeight*s)/2, flyerImg.naturalWidth*s, flyerImg.naturalHeight*s);
+       ctx.restore();
+    }
 
-    // Contact
-    ctx.fillStyle = '#eef1ff';
-    ctx.font = Math.round(H * 0.022) + 'px system-ui';
-    const contactLine = 'Contact ' + this.meta.staffName + ' for your virtual classes';
-    ctx.fillText(contactLine, W / 2, H * 0.50);
+    // DRAW CTA SCENE
+    if (ctaAlpha > 0) {
+       ctx.save();
+       ctx.globalAlpha = ctaAlpha;
+       ctx.textAlign = 'center';
+       
+       if (this.meta.brandLogo && this.meta.brandLogo.complete && this.meta.brandLogo.naturalWidth) {
+         const lw = Math.min(W * 0.15, 120);
+         const lh = lw * (this.meta.brandLogo.naturalHeight / this.meta.brandLogo.naturalWidth);
+         ctx.drawImage(this.meta.brandLogo, (W - lw) / 2, H * 0.20 + yOffset, lw, lh);
+       } else {
+         ctx.fillStyle = '#ffb347';
+         ctx.font = 'bold ' + Math.round(H * 0.08) + 'px system-ui';
+         ctx.fillText('🎓', W / 2, H * 0.25 + yOffset);
+       }
+       
+       ctx.fillStyle = '#ffffff';
+       ctx.font = 'bold ' + Math.round(H * 0.08) + 'px system-ui';
+       ctx.fillText('THANK YOU FOR WATCHING', W / 2, H * 0.48 + yOffset);
 
-    ctx.fillStyle = '#ffb347';
-    ctx.font = 'bold ' + Math.round(H * 0.024) + 'px system-ui';
-    ctx.fillText('08100866322 · 08094481488', W / 2, H * 0.56);
+       ctx.fillStyle = '#9aa3cf';
+       ctx.font = Math.round(H * 0.035) + 'px system-ui';
+       ctx.fillText(this.meta.brand || 'HMG Academy', W / 2, H * 0.58 + yOffset);
+       
+       ctx.fillStyle = '#ffb347';
+       ctx.font = 'bold ' + Math.round(H * 0.03) + 'px system-ui';
+       ctx.fillText('Instructor: ' + (this.meta.staffName || 'Adewale Adeagbo'), W / 2, H * 0.65 + yOffset);
 
-    // Ecosystem
-    ctx.fillStyle = '#6b7591';
-    ctx.font = Math.round(H * 0.018) + 'px system-ui';
-    ctx.fillText('Part of the HMG Concepts Ecosystem', W / 2, H * 0.66);
+       // Call To Action Bottom Bar
+       ctx.fillStyle = '#ff6b00'; 
+       ctx.fillRect(0, H - Math.round(H * 0.15), W, Math.round(H * 0.15));
 
-    ctx.fillStyle = '#9aa3cf';
-    ctx.font = Math.round(H * 0.016) + 'px system-ui';
-    ctx.fillText('HMG Concepts · HMG Academy · HMG Technologies · HMG Media · HMG Gospel', W / 2, H * 0.72);
+       ctx.fillStyle = '#ffffff';
+       ctx.font = 'bold ' + Math.round(H * 0.05) + 'px system-ui';
+       ctx.textAlign = 'center';
+       ctx.textBaseline = 'middle';
+       ctx.fillText('🚀 READY TO LEARN MORE? CONTACT US TODAY!', W / 2, H - Math.round(H * 0.075));
+       ctx.restore();
+    }
 
-    ctx.fillStyle = '#ffb347';
-    ctx.font = Math.round(H * 0.02) + 'px system-ui';
-    ctx.fillText('⭐ Follow us for more academic content ⭐', W / 2, H * 0.85);
+    ctx.restore(); // restore initial grid/background save block
   },
 
   /** Draw lower thirds bar at the bottom of the frame */
   drawLowerThird(ctx, W, H, text, ts) {
     if (!text) return;
     const barH = Math.round(H * 0.06);
-    const y = H - barH;
+    const footH = Math.round(H * 0.045);
+    const y = H - footH - barH;
     ctx.save();
 
     // Semi-transparent background
@@ -307,7 +445,7 @@ const HMGREC = {
     ctx.clip();
 
     const speed = 40; // pixels per second
-    const offset = (ts * speed) % (W + ctx.measureText(text).width);
+    const offset = ((ts / 1000) * speed) % (W + ctx.measureText(text).width);
     const x = W - offset;
 
     ctx.fillStyle = '#ffb347';
@@ -333,7 +471,8 @@ const HMGREC = {
 
     const alpha = phase < 300 ? phase / 300 : (phase > duration - 300 ? (duration - phase) / 300 : 1);
     const barH = Math.round(H * 0.07);
-    const y = Math.round(H * 0.18);
+    const footH = Math.round(H * 0.045);
+    const y = H - footH - Math.round(H * 0.06) - Math.round(H * 0.07) - 10;
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -358,19 +497,21 @@ const HMGREC = {
   /** Draw text-ad overlay on the frame */
   drawAdOverlay(ctx, W, H, ts, recStartTs) {
     if (!this.meta.adText) return;
-    const elapsed = (ts - recStartTs) / 1000;
+    const elapsed = (ts - recStartTs);
     const interval = this.meta.adInterval * 1000;
-    const phase = elapsed % (this.meta.adInterval + 5); // 5 sec display
+    const phase = elapsed % ((this.meta.adInterval * 1000) + 5000); // 5 sec display
 
-    if (phase > this.meta.adInterval) {
+    if (phase > this.meta.adInterval * 1000) {
       // Display ad
       const adDuration = 5000;
-      const localPhase = phase - this.meta.adInterval;
+      const localPhase = phase - (this.meta.adInterval * 1000);
       if (localPhase > adDuration) return;
 
       const alpha = localPhase < 300 ? localPhase / 300 : (localPhase > adDuration - 300 ? (adDuration - localPhase) / 300 : 1);
       const adH = Math.round(H * 0.05);
-      const adY = Math.round(H * 0.10);
+      let cbtUrl = ''; try { cbtUrl = localStorage.getItem("hmg_cbt_link") || ""; } catch(e){}
+      const headH = Math.round(H * 0.09) + (cbtUrl ? Math.round(H * 0.045) : 0);
+      const adY = headH + Math.round(H * 0.02);
 
       ctx.save();
       ctx.globalAlpha = alpha;
@@ -662,6 +803,27 @@ window.CDSecurity = CDSecurity;
         bar.remove();
         toast('Recovery in progress...', 'ok', 3000);
         // The chunks are in IndexedDB — the user can download them
+        // The chunks are in IndexedDB — the user can download them
+        try {
+          const db = await CDCrashSafe.openDB();
+          const tx = db.transaction(CDCrashSafe.storeName, 'readonly');
+          const store = tx.objectStore(CDCrashSafe.storeName);
+          const all = await new Promise(r => { const q = store.getAll(); q.onsuccess = () => r(q.result); });
+          
+          const sessionIds = [...new Set(all.map(r => r.sessionId))];
+          for (const sid of sessionIds) {
+             const chunks = all.filter(r => r.sessionId === sid).sort((a,b) => a.ts - b.ts).map(r => r.chunk);
+             if (chunks.length > 0) {
+               const blob = new Blob(chunks, { type: 'video/webm' });
+               const fname = 'Recovered_Lesson_' + new Date().toISOString().slice(0,10) + '.webm';
+               const a = document.createElement('a');
+               a.href = URL.createObjectURL(blob);
+               a.download = fname;
+               a.click();
+               URL.revokeObjectURL(a.href);
+             }
+          }
+        } catch(e) { console.error('Recovery failed', e); }
         CDCrashSafe.clearSession('all');
       });
       document.getElementById('recRecoverNo').addEventListener('click', () => {
@@ -690,8 +852,8 @@ window.CDSecurity = CDSecurity;
   window.HMG_REC_SESSION = {
     sessionId: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     startTs: 0,
-    introMs: 6000,
-    outroMs: 4000,
+    introMs: 15000,
+    outroMs: 15000,
     ending: false,
     endTs: 0
   };
@@ -715,6 +877,7 @@ window.CDSecurity = CDSecurity;
     prefill("staffName", meta.staffName || defaults.staffName || "Adewale Adeagbo");
     prefill("staffTitle", meta.staffTitle || defaults.staffTitle || "Virtual Tutor | Data Scientist | AI-Augmented Solutions Developer");
     prefill("lowerThird", meta.lowerThird || defaults.lowerThird || "If you want to book virtual classes with us, contact Adewale on 08100866322, 08094481488");
+    prefill("cbtLink", localStorage.getItem("hmg_cbt_link") || "");
     prefill("adText", meta.adText || defaults.adText || "");
     prefill("adInterval", meta.adInterval || defaults.adIntervalSeconds || 60);
     prefill("pulseInterval", meta.pulseInterval || defaults.staffPulseSeconds || 30);
@@ -724,7 +887,9 @@ window.CDSecurity = CDSecurity;
     const cams = $("#hmgRecIncludeCams");
     if (cams) cams.checked = Store.get("rec_students", false);
     const logoStatus = $("#hmgRecLogoStatus");
-    if (logoStatus) logoStatus.textContent = Store.get("rec_logo", null) ? "✓ custom logo saved" : "Logo: HMG ACADEMY default";
+    if (logoStatus) logoStatus.textContent = (Store.get("hmg_rec_logo", null) || Store.get("rec_logo", null)) ? "✓ custom logo saved" : "Logo: HMG ACADEMY default";
+    const photoStatus = $("#hmgRecPhotoStatus");
+    if (photoStatus) photoStatus.textContent = Store.get("hmg_rec_photo", null) ? "✓ teacher photo saved" : "Photo: Not uploaded";
     openModal("#mHmgRecSetup");
     return true;
   };
@@ -751,6 +916,8 @@ window.CDSecurity = CDSecurity;
     meta.staffTitle = read("staffTitle") || "Virtual Tutor | Data Scientist";
     meta.lowerThird = read("lowerThird");
     meta.adText = read("adText");
+    meta.cbtLink = read("cbtLink");
+    if (meta.cbtLink) localStorage.setItem("hmg_cbt_link", meta.cbtLink); else localStorage.removeItem("hmg_cbt_link");
     meta.adInterval = Math.max(15, Number(read("adInterval")) || 60);
     meta.pulseInterval = Math.max(10, Number(read("pulseInterval")) || 30);
     meta.footer = read("footer");
@@ -782,12 +949,78 @@ window.CDSecurity = CDSecurity;
   /* ----------------------------------------------------------
      Wire dialog buttons
      ---------------------------------------------------------- */
-  document.addEventListener("click", function (e) {
-    if (e.target && e.target.id === "hmgRecBegin") { HMGREC.begin(); }
-    if (e.target && e.target.id === "hmgRecLogoBtn") {
-      const f = $("#hmgRecLogoFile"); if (f) f.click();
+  
+  const btnLogo = document.getElementById("hmgRecLogoBtn");
+  if(btnLogo) btnLogo.addEventListener('click', () => { const f = document.getElementById("hmgRecLogoFile"); if(f) f.click(); });
+  const btnPhoto = document.getElementById("hmgRecPhotoBtn");
+  if(btnPhoto) btnPhoto.addEventListener('click', () => { const f = document.getElementById("hmgRecPhotoFile"); if(f) f.click(); });
+  
+  
+  // Global Event Delegation for ALL file uploads to prevent broken bindings
+  document.addEventListener("change", async function(e) {
+    if (e.target && e.target.id === "hmgRecPhotoFile") {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const fr = new FileReader();
+      fr.onload = async (ev) => {
+        try {
+          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = ev.target.result; });
+          const c = document.createElement("canvas");
+          const MAX_SIZE = 250;
+          let k = 1;
+          if (img.naturalWidth > MAX_SIZE || img.naturalHeight > MAX_SIZE) {
+             k = Math.min(1, MAX_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+          }
+          c.width = Math.round(img.naturalWidth * k) || 1;
+          c.height = Math.round(img.naturalHeight * k) || 1;
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          Store.set("hmg_rec_photo", c.toDataURL("image/jpeg", 0.6));
+          HMGREC._loadLogo();
+          const st = document.getElementById("hmgRecPhotoStatus");
+          if (st) st.textContent = "✓ teacher photo saved";
+          if(typeof toast === "function") toast("👤 Photo saved", "ok");
+        } catch(err) {
+          if(typeof toast === "function") toast("Photo error: " + err.message, "err");
+        }
+      };
+      fr.readAsDataURL(f);
     }
   });
+  document.addEventListener("click", function (e) {
+    if (e.target && e.target.id === "hmgRecBegin") { HMGREC.begin(); }
+
+  });
+  const recPhotoFile = document.getElementById("hmgRecPhotoFile");
+  if (recPhotoFile) recPhotoFile.addEventListener("change", async function (e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const fr = new FileReader();
+    fr.onload = async (ev) => {
+            const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = ev.target.result; });
+      try {
+        const c = document.createElement("canvas");
+        // Drastically scale down to avoid QuotaExceededError in localStorage
+        const MAX_SIZE = 250;
+        let k = 1;
+        if (img.naturalWidth > MAX_SIZE || img.naturalHeight > MAX_SIZE) {
+           k = Math.min(1, MAX_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+        }
+        c.width = Math.round(img.naturalWidth * k) || 1;
+        c.height = Math.round(img.naturalHeight * k) || 1;
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        // Save as low quality JPEG to ensure it fits (approx < 20KB)
+        Store.set("hmg_rec_photo", c.toDataURL("image/jpeg", 0.6));
+        HMGREC._loadLogo();
+        const st = document.getElementById("hmgRecPhotoStatus");
+        if (st) st.textContent = "✓ teacher photo saved";
+        if(typeof toast === "function") toast("👤 Photo saved", "ok");
+      } catch(err) {
+        if(typeof toast === "function") toast("Photo error: " + err.message, "err");
+      }
+    };
+    fr.readAsDataURL(f);
+  });
+
   const recLogoFile = document.getElementById("hmgRecLogoFile");
   if (recLogoFile) recLogoFile.addEventListener("change", async function (e) {
     const f = e.target.files && e.target.files[0];
@@ -795,23 +1028,26 @@ window.CDSecurity = CDSecurity;
     const fr = new FileReader();
     fr.onload = async (ev) => {
       /* downscale to keep localStorage light */
-      const img = await new Promise((res) => {
-        const i = new Image();
-        i.onload = () => res(i);
-        i.src = ev.target.result;
-      });
-      const c = document.createElement("canvas");
-      const k = Math.min(1, 360 / Math.max(img.naturalWidth, img.naturalHeight));
-      c.width = Math.round(img.naturalWidth * k);
-      c.height = Math.round(img.naturalHeight * k);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = ev.target.result; });
       try {
-        Store.set("rec_logo", c.toDataURL("image/png"));
+        const c = document.createElement("canvas");
+        const MAX_SIZE = 250;
+        let k = 1;
+        if (img.naturalWidth > MAX_SIZE || img.naturalHeight > MAX_SIZE) {
+           k = Math.min(1, MAX_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+        }
+        c.width = Math.round(img.naturalWidth * k) || 1;
+        c.height = Math.round(img.naturalHeight * k) || 1;
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        Store.set("hmg_rec_logo", c.toDataURL("image/png"));
         HMGREC._loadLogo();
-        const st = $("#hmgRecLogoStatus");
+        if (typeof loadRecLogo === "function") loadRecLogo();
+        const st = document.getElementById("hmgRecLogoStatus");
         if (st) st.textContent = "✓ custom logo saved";
-        toast("🖼 Logo will appear on recordings", "ok");
-      } catch { toast("Logo too large to store — choose a smaller image.", "err"); }
+        if(typeof toast === "function") toast("🖼 Logo will appear on recordings", "ok");
+      } catch(err) {
+        if(typeof toast === "function") toast("Logo error: " + err.message, "err");
+      }
     };
     fr.readAsDataURL(f);
   });
@@ -835,12 +1071,11 @@ window.CDSecurity = CDSecurity;
     const s = window.HMG_REC_SESSION || {};
     if (!s.startTs) return false;
     const W = canvas.width, H = canvas.height;
-    if (s.ending) { this.drawOutroFrame(canvas, ctx, W, H); return true; }
+    if (s.ending) { this.drawOutroFrame(canvas, ctx, W, H, Date.now() - (s.endTs || Date.now())); return true; }
     const elapsed = Date.now() - s.startTs;
-    if (elapsed < (s.introMs || 6000)) {
-      this.drawIntroFrame(canvas, ctx, W, H);
-      this.drawLowerThird(ctx, W, H, this.meta.lowerThird, Date.now());
-      if (this.meta.adText) this.drawAdOverlay(ctx, W, H, Date.now(), s.startTs);
+    if (elapsed < (s.introMs || 15000)) {
+      this.drawIntroFrame(canvas, ctx, W, H, elapsed);
+      // Standalone: no lower thirds or ads during intro
       return true;
     }
     return false;
@@ -1022,3 +1257,23 @@ window.addEventListener("beforeunload", () => {
     } catch (e) {}
   });
 })();
+
+
+window.drawCBTOverlay = function(ctx, W, H, url) {
+  if (!url) return;
+  const originalHeadH = Math.round(H * 0.09);
+  const extraH = Math.round(H * 0.045);
+  
+  ctx.save();
+  // Fill the extra header space with a distinct brand color (emerald-700)
+  ctx.fillStyle = 'rgba(4, 120, 87, 1)';
+  ctx.fillRect(0, originalHeadH, W, extraH);
+  
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold ' + Math.round(extraH * 0.55) + 'px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🔗 TAKE QUIZ: ' + url, W / 2, originalHeadH + (extraH / 2));
+  
+  ctx.restore();
+};

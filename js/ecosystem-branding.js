@@ -28,9 +28,9 @@ const HMGEcosystem = {
 
   subsidiaries: [
     {
-      name: "HMG Academy",
+      name: "HMG ACADEMY",
       tagline: "Virtual Tutors, Home Schooling, Exam Prep & LMS",
-      url: "https://hmgacademy.pages.dev",
+      url: "https://hmgacademyclassdeck.vercel.app",
       description: "A full-service strictly virtual learning institution covering Nursery through Tertiary with vetted tutors, LMS platforms, exam prep and parent monitoring.",
       services: ["Virtual Tutoring", "Home Schooling", "WAEC/NECO/JAMB Prep", "LMS Platforms", "Parent Monitoring", "School Partnerships"]
     },
@@ -76,7 +76,7 @@ const HMGEcosystem = {
   <a href="https://hmgconcepts.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">HMG Concepts Ecosystem</a>
   <br/>
   <span style="font-size:11px">
-    <a href="https://hmgacademy.pages.dev" target="_blank" rel="noopener" style="color:#8fa3d0;text-decoration:none">Academy</a> · 
+    <a href="https://hmgacademyclassdeck.vercel.app" target="_blank" rel="noopener" style="color:#8fa3d0;text-decoration:none">Academy</a> · 
     <a href="https://hmgtechnologies.pages.dev" target="_blank" rel="noopener" style="color:#8fa3d0;text-decoration:none">Technologies</a> · 
     <a href="https://hmgmedia.pages.dev" target="_blank" rel="noopener" style="color:#8fa3d0;text-decoration:none">Media</a> · 
     <a href="https://hmggospel.pages.dev" target="_blank" rel="noopener" style="color:#8fa3d0;text-decoration:none">Gospel</a>
@@ -138,7 +138,7 @@ const HMGEcosystem = {
             "url": "https://cssadewale.pages.dev/"
           },
           "sameAs": [
-            "https://hmgacademy.pages.dev/",
+            "https://hmgacademyclassdeck.vercel.app/",
             "https://hmgtechnologies.pages.dev/",
             "https://hmgmedia.pages.dev/",
             "https://hmggospel.pages.dev/",
@@ -172,7 +172,7 @@ const HMGEcosystem = {
     <div style="margin-bottom:8px">Built by <b>Adewale Samson Adeagbo</b> — Lagos, Nigeria</div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <a href="https://hmgconcepts.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">🌐 HMG Concepts</a>
-      <a href="https://hmgacademy.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">🎓 HMG Academy</a>
+      <a href="https://hmgacademyclassdeck.vercel.app" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">🎓 HMG ACADEMY</a>
       <a href="https://hmgtechnologies.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">💻 HMG Technologies</a>
       <a href="https://hmgmedia.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">📺 HMG Media</a>
       <a href="https://hmggospel.pages.dev" target="_blank" rel="noopener" style="color:#4f6ef7;text-decoration:none">✝️ HMG Gospel</a>
@@ -195,7 +195,7 @@ const HMGEcosystem = {
   injectMetaTags: function() {
     const meta = [
       { name: "author", content: this.brand.founder + ", HMG Concepts" },
-      { name: "keywords", content: "HMG Concepts, HMG Academy, HMG Technologies, HMG Media, HMG Gospel, Adewale Samson Adeagbo, online teaching platform Nigeria, virtual classroom, tablet teaching app, WebRTC classroom, no OBS tablet live streaming, Lagos Nigeria EdTech" }
+      { name: "keywords", content: "HMG Concepts, HMG ACADEMY, HMG Technologies, HMG Media, HMG Gospel, Adewale Samson Adeagbo, online teaching platform Nigeria, virtual classroom, tablet teaching app, WebRTC classroom, no OBS tablet live streaming, Lagos Nigeria EdTech" }
     ];
     meta.forEach(m => {
       if (!document.querySelector(`meta[name="${m.name}"]`)) {

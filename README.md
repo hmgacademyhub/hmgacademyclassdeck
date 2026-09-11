@@ -1,10 +1,10 @@
 # HMG ACADEMY CLASS DECK — ClassDesk v3 (v11.1.1) 🧑‍🏫📡🛡
 
-**ClassDesk v3** builds on the existing HMG Academy ClassDeck without removing previous features or changing the UI/layout philosophy. It adds stronger subscription/security protection, optional Cloudflare Worker license gateway, forensic watermarking, secure invite links, security audit export, and Picture-in-Picture continuity — while keeping the direct tablet screen/workspace broadcast and no-OBS tablet social live relay workflow from ClassDesk v2.
+**ClassDesk v3** builds on the existing HMG ACADEMY CLASS DECK without removing previous features or changing the UI/layout philosophy. It adds stronger subscription/security protection, optional Cloudflare Worker license gateway, forensic watermarking, secure invite links, security audit export, and Picture-in-Picture continuity — while keeping the direct tablet screen/workspace broadcast and no-OBS tablet social live relay workflow from ClassDesk v2.
 
 **By Adewale Samson Adeagbo** — AI-Augmented Solutions Developer · Data Scientist · STEM Educator (Lagos, Nigeria).
 Founder of HMG ACADEMY and the HMG family of brands:
-[cssadewale.pages.dev](https://cssadewale.pages.dev) · [hmgacademy.pages.dev](https://hmgacademy.pages.dev) ·
+[cssadewale.pages.dev](https://cssadewale.pages.dev) · [hmgacademyclassdeck.vercel.app](https://hmgacademyclassdeck.vercel.app) ·
 [hmgconcepts.pages.dev](https://hmgconcepts.pages.dev) · [hmgtechnologies.pages.dev](https://hmgtechnologies.pages.dev) ·
 [hmgmedia.pages.dev](https://hmgmedia.pages.dev) · [hmggospel.pages.dev](https://hmggospel.pages.dev)
 *The official HMG ACADEMY logo and founder photo are embedded on the landing page (assets/).*
@@ -140,7 +140,7 @@ Built after deep market research into the leading classroom platforms — **Whit
 | 5 | **🎬 YouTube-ready branded recording** | ⏺ now opens a setup dialog: enter **Subject, Topic, Class** and tick whether to include student cameras. The recording uses a dedicated 1280×720 canvas that composes: a **branded header** with the real **HMG ACADEMY logo** + "Subject — Topic" + class line, the **two split panes**, your **camera in a bottom-right PiP** (mirrored, amber border) whenever it is on, optionally up to **3 student camera tiles** stacked on the left edge, and a **footer** with "▶ HMG CONCEPTS on YouTube" + date/time, plus a REC dot. Saved as `HMG_Subject_Topic_Class_DATE.webm` at 1.2 Mbps — upload directly to the HMG CONCEPTS channel. Still uses the private pipeline (zero conflict with Meet/Zoom screen share). |
 | 6 | **🧮 Calculator visible to students** | When the floating scientific calculator is open, a live calculator panel is rendered into the **top-right of the broadcast**: current expression/result in large monospace plus the last three history lines, with the DEG/RAD mode shown. Students watch every keystroke of the working. Close the calculator and it leaves the stream. |
 | 7 | **📤 CSV quiz import** | In the 🏆 Quiz drawer: **Choose CSV file** with the exact format `Question, A, B, C, D, Correct option, Explanation/working`. A proper RFC-4180 parser handles quoted fields with commas; the header row is auto-detected; the correct option accepts A–D or 1–4; rows with problems are skipped and counted. Imported questions appear in the editable text box for review (explanations as `# …` lines) before you start. **Explanations are sent to each student** right after they answer (💡 under the ✅/❌ feedback) — instant corrective teaching. A **⬇ Sample CSV** button downloads a ready template. |
-| 8 | **💼 Teacher licensing (SaaS revenue for HMG ACADEMY)** | Students always join free — nothing changes for them. **Teachers** now pass a license gate on the Studio: a **3-day free trial** starts automatically on first use (badge shows days left); after it expires the studio locks until they activate a personal **HMG ACCESS KEY** (name-bound, month-of-expiry encoded, SHA-256 signed — validated fully offline, no server). You generate keys on the private **admin.html** page using your secret phrase: teacher pays the small fee (Paystack/Flutterwave link or bank transfer — your choice), you type their name + expiry, send the key via WhatsApp. Renewals = a new key. ⚠ Before deploying, change `AUTH_SECRET` in `js/auth.js` and use the same phrase on admin.html. (For bank-grade licensing later, the README notes how to move validation to a free Cloudflare Worker.) |
+| 8 | **💼 Teacher licensing (SaaS revenue for HMG ACADEMY)** | Students always join free — nothing changes for them. **Teachers** now pass a license gate on the Studio: a **3-day free trial** starts automatically on first use (badge shows days left); after it expires the studio locks until they activate a personal **HMG ACADEMY access** (name-bound, month-of-expiry encoded, SHA-256 signed — validated fully offline, no server). You generate keys on the private **admin.html** page using your secret phrase: teacher pays the small fee (Paystack/Flutterwave link or bank transfer — your choice), you type their name + expiry, send the key via WhatsApp. Renewals = a new key. ⚠ Before deploying, change `AUTH_SECRET` in `js/auth.js` and use the same phrase on admin.html. (For bank-grade licensing later, the README notes how to move validation to a free Cloudflare Worker.) |
 | 9 | **📥 Analyst extras & fixes** | **Gradebook CSV export** (rank, student, score, room, date) from the quiz drawer for records and parent reports. `roundRect` **polyfill** added for older Android WebViews (keeps dice/recording graphics working on budget tablets). Service-worker shell updated (all core toolkit data, auxiliary pages, auth, admin page) and bumped to **v11.1.1** for clean auto-update. |
 
 ---
@@ -198,7 +198,7 @@ v4 directly answers ten field-tested issues. Feature-by-feature:
 | **🔑 Class PIN (room security)** | Settings → set an optional PIN. Students must enter it on the join screen; wrong/missing PIN connections are rejected before they enter. Combine with 🔒 room-lock for the strictest setup: PIN to get in, lock once everyone has arrived. |
 | **📈 Class analytics report** | 👥 drawer → **📈 Class report**: class duration, total joins, peak concurrent attendance, student chat-message count, quizzes run (with each winner), the current leaderboard and the full timestamped attendance log — previewed in-app and downloadable as a `.txt` file for your records or parents. |
 | **💾 One-file backup & restore** | Settings → **Backup everything** downloads a single `.json` containing all ClassDeck data on the device (lessons, quiz banks, notes, boards, settings, branding). **Restore from file** imports it on a new/repaired tablet in seconds. Move devices without losing a single board. |
-| **🎨 White-label branding** | Settings → set your **academy name** (replaces the broadcast watermark, e.g. "HMG Academy") and pick an **accent colour** — rebrand without touching code. Useful when other teachers/franchises use your deployment. |
+| **🎨 White-label branding** | Settings → set your **academy name** (replaces the broadcast watermark, e.g. "HMG ACADEMY") and pick an **accent colour** — rebrand without touching code. Useful when other teachers/franchises use your deployment. |
 | **🧮 Floating calculator** | Toolbar 🧮 opens a draggable calculator (÷ × − + ( ) % √ x² π). It floats above both panes — and because it is part of the app, it appears in the composite broadcast and in Meet screen shares, so students see the working. |
 | **⌨ Keyboard shortcuts** | With a USB/Bluetooth keyboard: `P` pen, `H` highlighter, `E` eraser, `L` laser, `R` rectangle, `O` ellipse, `A` arrow, `T` text, `Ctrl+Z`/`Ctrl+Y` undo/redo, `PageUp`/`PageDown` board pages, `F9` toggle focus mode, `Esc` exit focus. |
 
@@ -449,7 +449,7 @@ platform/
 cd platform
 git init
 git add .
-git commit -m "HMG ClassDeck v1.0"
+git commit -m "HMG ACADEMY CLASS DECK v1.0"
 git branch -M main
 git remote add origin https://github.com/<your-username>/hmg-classdeck.git
 git push -u origin main
@@ -498,8 +498,8 @@ automatically; users get the update on next refresh.
 
 ---
 
-Built with ❤ for **HMG Academy** · [cssadewale.pages.dev](https://cssadewale.pages.dev) ·
-[hmgconcepts.pages.dev](https://hmgconcepts.pages.dev) · [hmgacademy.pages.dev](https://hmgacademy.pages.dev) ·
+Built with ❤ for **HMG ACADEMY** · [cssadewale.pages.dev](https://cssadewale.pages.dev) ·
+[hmgconcepts.pages.dev](https://hmgconcepts.pages.dev) · [hmgacademyclassdeck.vercel.app](https://hmgacademyclassdeck.vercel.app) ·
 [hmgtechnologies.pages.dev](https://hmgtechnologies.pages.dev) · [hmgmedia.pages.dev](https://hmgmedia.pages.dev) ·
 [hmggospel.pages.dev](https://hmggospel.pages.dev)
 

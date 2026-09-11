@@ -1,5 +1,5 @@
 /* ============================================================
-   HMG ClassDeck — Service Worker v11.1.1
+   HMG ACADEMY CLASS DECK — Service Worker v11.1.1
    Cache-first for the app shell so the studio opens instantly
    and works offline (live class still needs internet, but the
    whiteboard/PDF/notes work fully offline).
@@ -8,7 +8,7 @@
    requests, making the site feel native on repeat visits.
    Bump CACHE_VERSION whenever you deploy changes.
    ============================================================ */
-const CACHE_VERSION = "hmg-classdeck-v11.1.1-classdesk-v3";
+const CACHE_VERSION = "hmg-classdeck-v12.0.0-standalone-merge";   /* bumped: V12 — enhanced engine merged, standalone auth restored */
 
 const SHELL = [
   "./",

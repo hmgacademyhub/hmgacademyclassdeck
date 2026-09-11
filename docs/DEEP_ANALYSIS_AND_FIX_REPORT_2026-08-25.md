@@ -115,7 +115,7 @@ The landing page presents three task-oriented doors:
 - **I'm a Student** → `join.html`
 - **Teaching on Meet / Zoom?** → `teach.html?meet=1`
 
-It also explains the split-screen workspace, built-in live classroom, teaching tools, quizzes, recording, social streaming, whiteboard, classroom controls, student boards, activities, Reader Cast and offline/PWA behavior. HMG Academy branding and the founder card are embedded locally.
+It also explains the split-screen workspace, built-in live classroom, teaching tools, quizzes, recording, social streaming, whiteboard, classroom controls, student boards, activities, Reader Cast and offline/PWA behavior. HMG ACADEMY branding and the founder card are embedded locally.
 
 ### 4.2 Teacher Studio — `teach.html`
 

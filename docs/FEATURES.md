@@ -178,7 +178,7 @@ Attendance CSV, full class report (duration, joins, peak, chats, polls, quizzes,
 - **Classroom Command Centre** (`classroom.html`) — attendance/behaviour/seating/hand-raise demo dashboard.
 - **Teacher Community** (`community.html`) — local feed + posting (no backend).
 - **Parent Portal** (`parent.html`) — demo report card with code PAR-8K2M (replace with real API for production).
-- **License Admin** (`admin.html`) — generates HMG ACCESS KEYS (keep private).
+- **License Admin** (`admin.html`) — generates HMG ACADEMY accessS (keep private).
 - **404 / robots / sitemap / manifests** — full SEO + PWA wiring.
 
 ---

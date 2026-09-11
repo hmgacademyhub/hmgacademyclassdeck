@@ -1,5 +1,5 @@
 /* ============================================================
-   HMG ClassDeck Generator — Template Engine v3 (generator.js)
+   HMG ACADEMY CLASS DECK Generator — Template Engine v3 (generator.js)
    Builds a branded ClassDeck website for a client and packages
    it as a ZIP containing TWO folders:
      1) <BRAND>-CLASSDECK/      → the branded, deployable ClassDeck
@@ -85,6 +85,10 @@ const CDGenerator = {
       'js/toolkit.js', 'js/toolkit-ext.js',
       'js/toolkit-data.js', 'js/toolkit-data2.js', 'js/toolkit-data3.js',
       'js/webcast.js', 'js/enhancements.js',
+      /* V12 — enhanced-engine modules every page now loads. Omitting them
+         made generated decks throw 404s for these scripts. */
+      'js/ecosystem-branding.js', 'js/enterprise-enhanced.js',
+      'js/portal-bridge.js', 'js/teach-toolbar-fix.js', 'js/fix-webm-duration.js',
       'vendor/peerjs.min.js', 'vendor/pdf.min.js',
       'vendor/pdf.worker.min.js', 'vendor/qrcode.min.js'
     ];
@@ -121,7 +125,7 @@ const CDGenerator = {
     if (logoData && /^data:image\//.test(logoData) && logoExt !== 'svg') {
       zip.file(deckFolder + '/assets/brand-logo.' + logoExt, logoData.split(',')[1] || '', { base64: true });
     }
-    zip.file(deckFolder + '/assets/brand-logo.svg', CDGenerator._logoSVG(cfg));
+    zip.file(deckFolder + '/assets/brand-logo.png', CDGenerator._logoSVG(cfg));
     zip.file(deckFolder + '/assets/favicon.svg', CDGenerator._faviconSVG(cfg));
     /* Branded config + license engine */
     zip.file(deckFolder + '/js/config.js', CDGenerator._configJS(cfg));
@@ -159,7 +163,7 @@ const CDGenerator = {
     for (const af of assetFiles) {
       if (assetBin[af]) zip.file(genFolder + '/' + af, assetBin[af], { binary: true });
     }
-    zip.file(genFolder + '/assets/brand-logo.svg', CDGenerator._logoSVG(cfg));
+    zip.file(genFolder + '/assets/brand-logo.png', CDGenerator._logoSVG(cfg));
     /* Generator docs */
     zip.file(genFolder + '/README.md', CDGenerator._genReadme(cfg));
     zip.file(genFolder + '/DEPLOYMENT-GUIDE.md', CDGenerator._deployGuide(cfg));

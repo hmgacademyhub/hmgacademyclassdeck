@@ -1,4 +1,4 @@
-/* HMG ClassDeck v3 security configuration.
+/* HMG ACADEMY CLASS DECK v3 security configuration.
    For strongest subscription enforcement, deploy security/license-gateway-worker
    and paste its HTTPS URL below. Leave empty for legacy offline/local licensing. */
 window.HMG_SECURITY = {

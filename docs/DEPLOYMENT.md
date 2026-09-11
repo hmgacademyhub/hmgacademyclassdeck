@@ -41,7 +41,7 @@ future updates take under a minute.
    `docs/` folders) into the upload box.
    ⚠ Upload the *contents*, not the folder itself, so `index.html` sits at the
    repository root. (If you upload the folder itself, see “Subfolder note” below.)
-6. Scroll down → commit message: `HMG ClassDeck v9.0` → **Commit changes**.
+6. Scroll down → commit message: `HMG ACADEMY CLASS DECK v9.0` → **Commit changes**.
 
 ### Method 1B: With Git (PC / Termux)
 
@@ -49,7 +49,7 @@ future updates take under a minute.
 cd classdesk
 git init
 git add .
-git commit -m "HMG ClassDeck v9.0"
+git commit -m "HMG ACADEMY CLASS DECK v9.0"
 git branch -M main
 git remote add origin https://github.com/<YOUR-USERNAME>/hmg-classdeck.git
 git push -u origin main
@@ -200,7 +200,7 @@ If anything fails on step 3–5, check: HTTPS URL? Camera/mic permissions
 
 ---
 
-*Maintained for HMG Academy / HMG Technologies. Questions → see README.md.*
+*Maintained for HMG ACADEMY / HMG Technologies. Questions → see README.md.*
 
 ---
 
@@ -214,7 +214,7 @@ If anything fails on step 3–5, check: HTTPS URL? Camera/mic permissions
 3. Revenue flow:
    - Teacher gets a 3-day free trial automatically (no signup friction).
    - To continue, they pay your fee via Paystack/Flutterwave payment link,
-     bank transfer or POS (put the details on hmgacademy.pages.dev).
+     bank transfer or POS (put the details on hmgacademyclassdeck.vercel.app).
    - On admin.html: type your secret + their full name + expiry month →
      generate the key → send it on WhatsApp.
    - Teacher enters name + key once in the Studio → licensed until expiry.

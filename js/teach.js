@@ -1,5 +1,26 @@
+
+/* --- KEEPALIVE ENGINE ---
+   Forces the browser to keep the tab fully active in the background
+   to prevent MediaRecorder timestamp gaps on Android/iOS. */
+let keepAliveCtx = null;
+let keepAliveOsc = null;
+function startKeepAlive() {
+  try {
+    if(!keepAliveCtx) keepAliveCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(keepAliveCtx.state === 'suspended') keepAliveCtx.resume();
+    keepAliveOsc = keepAliveCtx.createOscillator();
+    const gain = keepAliveCtx.createGain();
+    gain.gain.value = 0; // completely silent
+    keepAliveOsc.connect(gain);
+    gain.connect(keepAliveCtx.destination);
+    keepAliveOsc.start();
+  } catch(e) {}
+}
+function stopKeepAlive() {
+  try { if(keepAliveOsc) { keepAliveOsc.stop(); keepAliveOsc.disconnect(); keepAliveOsc = null; } } catch(e){}
+}
 /* ============================================================
-   HMG ClassDeck — Teacher Studio controller
+   HMG ACADEMY CLASS DECK — Teacher Studio controller
    • Dual-pane app loader (whiteboard / pdf / web / notes / image)
    • Resizable split, layout cycling, pane swap
    • Composite broadcaster: draws both panes onto one canvas and
@@ -8,7 +29,73 @@
    • Live classroom: roster, student cams, chat, polls, attendance,
      announcements, lock, kick, recording, timer.
    ============================================================ */
+
+/* ============================================================================
+   V38 NULL-SAFE DOM BINDING  (bugfix — see BUG-REPORT-CLASSDECK.md)
+   ----------------------------------------------------------------------------
+   ROOT CAUSE THIS SOLVES
+   teach.js is one long top-level script. It bound ~91 listeners with the
+   pattern  on("#id", ...)  and NO null check. teach.html had
+   drifted away from the JS: #timerStartCustom (and 35 other selectors) no
+   longer existed. So at line ~1824 $("#timerStartCustom") returned null and
+   the whole file died with:
+
+       TypeError: Cannot read properties of null (reading 'addEventListener')
+
+   Because a top-level throw aborts the ENTIRE remaining script, every
+   `const` declared after that point was left permanently uninitialised in
+   the Temporal Dead Zone, and every listener below it was never attached.
+   That single line produced ALL of the reported symptoms:
+
+     • "Cannot access 'securityAudit' before initialization"  (const @3494)
+       -> thrown by Go Live / End / PiP, which log to the security audit.
+     • "Cannot access 'studioEl' before initialization"       (const @2231)
+       -> thrown by Focus / Fullscreen.
+     • Rec icon does nothing            -> listener @1877 never bound.
+     • Calculator shows display but no keypad -> renderCalcKeys @2772 and the
+       btnCalc listener @2808 never ran, so #calcKeys stayed empty.
+     • Swap / Layout icons dead         -> applyLayout() reads TDZ bindings.
+     • ~20 further toolbar icons dead   -> all bound after the abort point.
+
+   THE FIX
+   on() binds only when the element exists and never throws. A missing
+   element is now a one-line console warning instead of a fatal error that
+   takes the other 20 features down with it. This makes future markup drift
+   degrade gracefully instead of catastrophically.
+   ========================================================================== */
+function on(sel, ev, fn, opts) {
+  var el = (typeof sel === "string") ? $(sel) : sel;
+  if (!el) {
+    if (!on._warned) on._warned = {};
+    if (!on._warned[sel]) {
+      on._warned[sel] = 1;
+      console.warn("[deck] skipped binding " + ev + " — no element matches " + sel);
+    }
+    return null;
+  }
+  el.addEventListener(ev, fn, opts);
+  return el;
+}
+window.on = on;
 "use strict";
+
+/* V37 — hoist mutable live-class state to the top of the file so no handler
+   (Focus, Fullscreen, End, PiP, Rec, captions, composite) can hit a TDZ
+   "Cannot access before initialization" error. Values are the same defaults
+   as the original later declarations. */
+var room = null;
+var lastEndedRoom = null;
+var micStream = null, camStream = null;
+var micOn = false, camOn = false;
+var stageStream = null;
+var classStartTs = 0, classTickInt = null;
+var recorder = null, recChunks = [], recStream = null;
+var focusOn = false;
+var capRec = null, capOn = false, capLines = [];
+var pipVideo = null, pipStream = null, pipPump = null, pipActive = false;
+var tabletLive = { pc: null, stream: null, resource: "", gateway: "", streamName: "classdeck", format: "landscape", raf: null, canvas: null, ownsComposite: false };
+var lastPrivatePeer = null;
+
 
 /* ------------------------------------------------------------
    0. PDF.js worker
@@ -948,13 +1035,13 @@ function applyLayout() {
 }
 applyLayout();
 
-$("#btnLayout").addEventListener("click", () => {
+on("#btnLayout", "click", () => {
   layoutMode = layoutMode === "split" ? "left" : layoutMode === "left" ? "right" : "split";
   toast("Layout: " + (layoutMode === "split" ? "Split view" : layoutMode === "left" ? "Left pane only" : "Right pane only"));
   applyLayout();
 });
 
-$("#btnSwap").addEventListener("click", () => {
+on("#btnSwap", "click", () => {
   const a = paneState.L.app, b = paneState.R.app;
   // move DOM nodes between bodies
   const swap = (from, to) => { while (from.firstChild) to.appendChild(from.firstChild); };
@@ -1248,12 +1335,12 @@ function wrapText(ctx, text, x, y, maxW, lineH) {
 /* ------------------------------------------------------------
    5. Live class
    ------------------------------------------------------------ */
-let room = null;
-let lastEndedRoom = null;
-let micStream = null, camStream = null;
-let micOn = false, camOn = false;
-let stageStream = null;
-let classStartTs = 0, classTickInt = null;
+/* room hoisted */
+/* lastEndedRoom hoisted */
+/* mic/cam streams hoisted */
+/* micOn/camOn hoisted */
+/* stageStream hoisted */
+/* class timer hoisted */
 
 /* Issue #13: shareable deep-link codes — teach.html?room=MYCODE lets a teacher
    paste ANY letters/numbers code into the URL, attach it to the site, and share
@@ -1342,7 +1429,7 @@ function studentLink() {
 }
 
 /* invite modal */
-$("#btnQR").addEventListener("click", () => {
+on("#btnQR", "click", () => {
   if (typeof authEnforce === "function" && !authEnforce()) return;
   $("#inviteLink").value = studentLink();
   $("#inviteCode").textContent = currentRoomCode();
@@ -1358,11 +1445,11 @@ $("#btnQR").addEventListener("click", () => {
   try { new QRCode(box, { text: studentLink(), width: 190, height: 190 }); } catch {}
   openModal("#mInvite");
 });
-$("#copyLink").addEventListener("click", async () => {
+on("#copyLink", "click", async () => {
   try { await navigator.clipboard.writeText($("#inviteLink").value); toast("Link copied!", "ok"); }
   catch { $("#inviteLink").select(); document.execCommand("copy"); toast("Link copied!", "ok"); }
 });
-$("#roomInfo").addEventListener("click", async () => {
+on("#roomInfo", "click", async () => {
   try { await navigator.clipboard.writeText(studentLink()); toast("Student link copied!", "ok"); } catch {}
 });
 syncWaitingRoomUI();
@@ -1373,7 +1460,7 @@ refreshPendingBadge();
    same deployment — rooms are fully isolated (separate peer IDs, separate
    star networks). This button gives the current device a fresh room instantly
    (e.g. two teachers sharing one tablet, or running parallel classes). */
-$("#btnNewRoom").addEventListener("click", (e) => {
+on("#btnNewRoom", "click", (e) => {
   e.stopPropagation();
   if (room && room.students && room.students.size > 0) { toast("End the current class first.", "err"); return; }
   if (!confirm("Generate a NEW room code? Old invite links will stop working.")) return;
@@ -1384,8 +1471,8 @@ $("#btnNewRoom").addEventListener("click", (e) => {
 });
 
 /* ---- go live / end ---- */
-$("#btnGoLive").addEventListener("click", goLive);
-$("#btnEndLive").addEventListener("click", endLive);
+on("#btnGoLive", "click", goLive);
+on("#btnEndLive", "click", endLive);
 
 async function goLive() {
   if (typeof authEnforce === "function" && !authEnforce()) return;   /* v6: hard gate */
@@ -1393,7 +1480,10 @@ async function goLive() {
   toast("Starting class…");
   try {
     lastEndedRoom = null;
-    room = new TeacherRoom(currentRoomCode(), { onEvent: onRoomEvent });
+    room = new TeacherRoom(currentRoomCode(), { 
+      onEvent: onRoomEvent,
+      massUrl: Store.get("mass_url") || null
+    });
     room.roomName = Store.get("roomname", "") || ("Class " + currentRoomCode());
     room.pin = Store.get("pin", "");
     room.inviteToken = Store.get("secure_invite", false) ? rotateInviteToken() : "";
@@ -1485,7 +1575,7 @@ function startCompositeStage() {
 async function ensureMic(on) {
   if (on && !micStream) {
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: { ideal: 48000 } }, video: false });
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true }, channelCount: 1, sampleRate: { ideal: 48000 }, googEchoCancellation: true, googAutoGainControl: true, googNoiseSuppression: true, googHighpassFilter: true }, video: false });
       const micTrack = micStream.getAudioTracks()[0];
       if (micTrack) micTrack.addEventListener("ended", () => {
         micOn = false;
@@ -1499,7 +1589,7 @@ async function ensureMic(on) {
   }
 }
 
-$("#btnMic").addEventListener("click", async () => {
+on("#btnMic", "click", async () => {
   if (!micStream) { await ensureMic(true); if (room && stageStream) room.setStageStream(stageStream); return; }
   micOn = !micOn;
   micStream.getAudioTracks().forEach((t) => (t.enabled = micOn));
@@ -1507,7 +1597,7 @@ $("#btnMic").addEventListener("click", async () => {
   toast(micOn ? "Mic on" : "Mic muted");
 });
 
-$("#btnCam").addEventListener("click", async () => {
+on("#btnCam", "click", async () => {
   if (!camOn) {
     try {
       camStream = await navigator.mediaDevices.getUserMedia({
@@ -1577,7 +1667,7 @@ function endLive(force = false) {
 
 /* ---- room events ---- */
 const camTiles = new Map();
-let lastPrivatePeer = null;   /* v5: most recent private-chat sender */
+/* lastPrivatePeer hoisted */
 function onRoomEvent(type, p) {
   switch (type) {
     case "student-joined":
@@ -1711,9 +1801,9 @@ function toggleDrawer(id) {
   $$(".drawer").forEach((x) => x.classList.remove("open"));
   if (!open) d.classList.add("open");
 }
-$("#btnStudents").addEventListener("click", () => { renderRoster(); renderWaiting(); toggleDrawer("#drawerStudents"); });
-$("#btnChat").addEventListener("click", () => toggleDrawer("#drawerChat"));
-$("#btnPoll").addEventListener("click", () => toggleDrawer("#drawerPoll"));
+on("#btnStudents", "click", () => { renderRoster(); renderWaiting(); toggleDrawer("#drawerStudents"); });
+on("#btnChat", "click", () => toggleDrawer("#drawerChat"));
+on("#btnPoll", "click", () => toggleDrawer("#drawerPoll"));
 $$(".drawer-close").forEach((b) => b.addEventListener("click", () => b.closest(".drawer").classList.remove("open")));
 
 /* ---- chat ---- */
@@ -1745,34 +1835,34 @@ function sendTeacherChat() {
     if (room) room.sendChat(text);
   }
 }
-$("#chatSend").addEventListener("click", sendTeacherChat);
-$("#chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendTeacherChat(); });
-$("#btnAnnounce").addEventListener("click", () => {
+on("#chatSend", "click", sendTeacherChat);
+on("#chatInput", "keydown", (e) => { if (e.key === "Enter") sendTeacherChat(); });
+on("#btnAnnounce", "click", () => {
   const text = prompt("Announcement (shows full-screen on every student device):");
   if (text && room) { room.sendAnnouncement(text); toast("Announcement sent", "ok"); }
 });
 
 /* ---- students drawer extras ---- */
-$("#btnLock").addEventListener("click", (e) => {
+on("#btnLock", "click", (e) => {
   if (!room) { toast("Go live first"); return; }
   room.setLocked(!room.locked);
   e.currentTarget.classList.toggle("active", room.locked);
   e.currentTarget.textContent = room.locked ? "🔓 Unlock room" : "🔒 Lock room";
   toast(room.locked ? "Room locked — no new students can join" : "Room unlocked");
 });
-$("#btnAttendance").addEventListener("click", () => {
+on("#btnAttendance", "click", () => {
   const dataRoom = room || lastEndedRoom;
   if (!dataRoom) { toast("No class data yet"); return; }
   downloadBlob(new Blob([dataRoom.attendanceCSV()], { type: "text/csv" }), "attendance-" + currentRoomCode() + "-" + Date.now() + ".csv");
 });
-$("#btnAskAllCams").addEventListener("click", () => {
+on("#btnAskAllCams", "click", () => {
   if (!room) return;
   for (const pid of room.students.keys()) room.requestStudentCam(pid, true);
   toast("Asked all students to turn cameras on");
 });
 
 /* ---- polls ---- */
-$("#pollStart").addEventListener("click", () => {
+on("#pollStart", "click", () => {
   if (!room) { toast("Go live first", "err"); return; }
   const q = $("#pollQ").value.trim();
   const opts = $("#pollOpts").value.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 6);
@@ -1782,7 +1872,7 @@ $("#pollStart").addEventListener("click", () => {
   $("#pollLive").classList.remove("hide");
   $("#pollLiveQ").textContent = q;
 });
-$("#pollEnd").addEventListener("click", () => {
+on("#pollEnd", "click", () => {
   if (!room) return;
   room.endPoll();
   $("#pollSetup").classList.remove("hide");
@@ -1801,13 +1891,13 @@ function renderPollBars(res) {
 
 /* ---- countdown timer ---- */
 let cdInt = null, cdEnd = 0;
-$("#btnTimer").addEventListener("click", () => openModal("#mTimer"));
+on("#btnTimer", "click", () => openModal("#mTimer"));
 $$("#mTimer [data-min]").forEach((b) => b.addEventListener("click", () => startCountdown(Number(b.dataset.min))));
-$("#timerStartCustom").addEventListener("click", () => {
+on("#timerStartCustom", "click", () => {
   const m = Number($("#timerCustom").value);
   if (m > 0) startCountdown(m);
 });
-$("#timerStop").addEventListener("click", () => { stopCountdown(); closeModal("#mTimer"); });
+on("#timerStop", "click", () => { stopCountdown(); closeModal("#mTimer"); });
 function startCountdown(mins) {
   cdEnd = Date.now() + mins * 60000;
   closeModal("#mTimer");
@@ -1842,7 +1932,7 @@ function stopCountdown() {
      • optionally the student camera tiles (toggle in the dialog),
      • a footer strip with the HMG CONCEPTS channel credit + date.
    Saved as .webm — upload directly to the HMG CONCEPTS YouTube channel. */
-let recorder = null, recChunks = [], recStream = null;
+/* recorder hoisted */
 let recCanvas = null, recCtx = null, recRaf = null;
 let recMeta = { subject: "", topic: "", klass: "", students: false, brand: "", footer: "" };
 /* v7 (issue 4): each teacher records under THEIR OWN brand.
@@ -1850,13 +1940,18 @@ let recMeta = { subject: "", topic: "", klass: "", students: false, brand: "", f
    Brand/footer text: from the recording dialog (remembered). */
 let recLogo = new Image();
 function loadRecLogo() {
-  const data = Store.get("rec_logo", null);
+  const data = Store.get("hmg_rec_logo") || Store.get("rec_logo", null);
   recLogo = new Image();
-  if (data) recLogo.src = data;
+  if (data) {
+    recLogo.src = data;
+  } else {
+    recLogo.src = "../assets/img/logo.png";
+    recLogo.onerror = () => { recLogo.src = "assets/icon-192.png"; };
+  }
 }
 loadRecLogo();
 
-$("#btnRec").addEventListener("click", () => {
+on("#btnRec", "click", () => {
   if (recorder && recorder.state === "recording") { stopRecording(); return; }
   /* Auth-enforce first (same as recBegin in the classic dialog). */
   if (typeof authEnforce === "function" && !authEnforce()) return;
@@ -1872,8 +1967,8 @@ $("#btnRec").addEventListener("click", () => {
   $("#recLogoStatus").textContent = Store.get("rec_logo", null) ? "✓ custom logo saved" : "";
   openModal("#mRecSetup");
 });
-$("#recLogoBtn").addEventListener("click", () => $("#recLogoFile").click());
-$("#recLogoFile").addEventListener("change", async (e) => {
+on("#recLogoBtn", "click", () => $("#recLogoFile").click());
+on("#recLogoFile", "change", async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   e.target.value = "";
@@ -1894,7 +1989,7 @@ $("#recLogoFile").addEventListener("change", async (e) => {
     toast("🖼 Your logo will appear on recordings", "ok");
   } catch { toast("Logo too large to store — choose a smaller image.", "err"); }
 });
-$("#recBegin").addEventListener("click", () => {
+on("#recBegin", "click", () => {
   if (typeof authEnforce === "function" && !authEnforce()) { closeModal("#mRecSetup"); return; }
   recMeta.subject = $("#recSubject").value.trim() || "Lesson";
   recMeta.topic = $("#recTopic").value.trim() || "";
@@ -1912,35 +2007,42 @@ $("#recBegin").addEventListener("click", () => {
 
 function drawRecordingFrame() {
   const ctx = recCtx, W = recCanvas.width, H = recCanvas.height;
-  const headH = Math.round(H * 0.09), footH = Math.round(H * 0.045);
+  if(ctx) ctx.globalAlpha = 1.0;
+  const baseHeadH = Math.round(H * 0.09);
+  const footH = Math.round(H * 0.045);
+  let cbtUrl = '';
+  try { cbtUrl = localStorage.getItem("hmg_cbt_link") || ""; } catch(e) {}
+  const headH = baseHeadH + (cbtUrl ? Math.round(H * 0.045) : 0);
+  
   /* header: logo + subject/topic/class */
   ctx.fillStyle = "#10142b";
   ctx.fillRect(0, 0, W, headH);
-  /* v7: the TEACHER'S brand — their logo, or a coloured initial badge */
+  
+  /* Draw base header elements inside baseHeadH bounds */
   if (recLogo.complete && recLogo.naturalWidth) {
-    const lh = headH * 0.78, lw = Math.min(lh * (recLogo.naturalWidth / recLogo.naturalHeight), W * 0.22);
-    ctx.drawImage(recLogo, 10, (headH - lh) / 2, lw, lh);
+    const lh = baseHeadH * 0.78, lw = Math.min(lh * (recLogo.naturalWidth / recLogo.naturalHeight), W * 0.22);
+    ctx.drawImage(recLogo, 10, (baseHeadH - lh) / 2, lw, lh);
   } else {
-    const bs = headH * 0.7;
+    const bs = baseHeadH * 0.7;
     ctx.fillStyle = "#4f6ef7";
-    ctx.beginPath(); ctx.roundRect(10, (headH - bs) / 2, bs, bs, bs * 0.22); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(10, (baseHeadH - bs) / 2, bs, bs, bs * 0.22); ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.font = "bold " + Math.round(bs * 0.62) + "px system-ui, sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText((recMeta.brand || "C").charAt(0).toUpperCase(), 10 + bs / 2, headH / 2 + bs * 0.03);
+    ctx.fillText((recMeta.brand || "C").charAt(0).toUpperCase(), 10 + bs / 2, baseHeadH / 2 + bs * 0.03);
   }
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold " + Math.round(headH * 0.34) + "px system-ui, sans-serif";
+  ctx.font = "bold " + Math.round(baseHeadH * 0.34) + "px system-ui, sans-serif";
   ctx.textBaseline = "middle"; ctx.textAlign = "center";
   const title = recMeta.subject + (recMeta.topic ? " — " + recMeta.topic : "");
-  ctx.fillText(title, W / 2, headH * 0.38, W * 0.5);
+  ctx.fillText(title, W / 2, baseHeadH * 0.38, W * 0.5);
   ctx.fillStyle = "#9aa3cf";
-  ctx.font = Math.round(headH * 0.24) + "px system-ui, sans-serif";
-  ctx.fillText((recMeta.klass ? recMeta.klass + "  ·  " : "") + recMeta.brand, W / 2, headH * 0.74, W * 0.5);
+  ctx.font = Math.round(baseHeadH * 0.24) + "px system-ui, sans-serif";
+  ctx.fillText((recMeta.klass ? recMeta.klass + "  ·  " : "") + recMeta.brand, W / 2, baseHeadH * 0.74, W * 0.5);
   ctx.fillStyle = "#ffb347";
-  ctx.font = "bold " + Math.round(headH * 0.26) + "px system-ui, sans-serif";
+  ctx.font = "bold " + Math.round(baseHeadH * 0.26) + "px system-ui, sans-serif";
   ctx.textAlign = "right";
-  ctx.fillText(recMeta.brand, W - 12, headH / 2, W * 0.26);
+  ctx.fillText(recMeta.brand, W - 12, baseHeadH / 2, W * 0.26);
   ctx.textAlign = "left";
   /* workspace (the live broadcast canvas) */
   drawComposite(); // ensure COMP is fresh even if not live
@@ -1980,7 +2082,8 @@ function drawRecordingFrame() {
   ctx.textAlign = "left"; ctx.textBaseline = "middle";
   ctx.fillText(recMeta.footer || ("Recorded with HMG ACADEMY CLASS DECK"), 12, H - footH / 2, W * 0.6);
   ctx.textAlign = "right";
-  ctx.fillText(new Date().toLocaleDateString() + "  ·  " + new Date().toLocaleTimeString(), W - 12, H - footH / 2);
+  const recDateStr = new Date().toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'}) + "  ·  " + new Date().toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', hour12:true});
+  ctx.fillText(recDateStr, W - 12, H - footH / 2);
   ctx.textAlign = "left";
   /* REC dot */
   ctx.fillStyle = "#ff5d5d";
@@ -2012,8 +2115,10 @@ async function startRecording() {
   await ensureMic(true);
   if (micStream) micStream.getAudioTracks().forEach((t) => recStream.addTrack(t));
   const candidates = [
-    "video/mp4;codecs=avc1.42E01E,mp4a.40.2", // Safari/new Chromium where available
+    // FORCE MP4: It is completely universally supported and inherently avoids all WebM duration/scrubbing bugs across every OS, social media, and native media player.
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4",
+    // Fallbacks to WebM only if MP4 physically fails to initialize on obscure older browsers
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
     "video/webm"
@@ -2044,16 +2149,51 @@ async function startRecording() {
       const outType = activeRecorder.mimeType || mime || "video/webm";
       const ext = outType.includes("mp4") ? ".mp4" : ".webm";
       const fname = [safe(recMeta.brand || "Lesson"), safe(recMeta.subject || ""), safe(recMeta.topic || ""), safe(recMeta.klass || ""), new Date().toISOString().slice(0, 10)].filter(Boolean).join("_") + ext;
-      if (chunks.length) downloadBlob(new Blob(chunks, { type: outType }), fname);
-      /* Clear the mirrored IndexedDB chunks now that the recording is committed. */
+      
+      if (chunks.length) {
+        const rawBlob = new Blob(chunks, { type: outType });
+        if (outType.includes("webm") && window.ysFixWebmDuration && window.HMG_REC_SESSION && window.HMG_REC_SESSION.startTs) {
+          const recordedDurationMs = Date.now() - window.HMG_REC_SESSION.startTs;
+          try {
+            window.ysFixWebmDuration(rawBlob, recordedDurationMs, function(fixedBlob) {
+              downloadBlob(fixedBlob || rawBlob, fname);
+            });
+          } catch(err) { downloadBlob(rawBlob, fname); }
+        } else {
+          downloadBlob(rawBlob, fname);
+        }
+      }
+      stopKeepAlive();
       if (window.CDCrashSafe && window.CDCrashSafe.clearSession && window.HMG_REC_SESSION) {
         try { CDCrashSafe.clearSession(window.HMG_REC_SESSION.sessionId); } catch {}
       }
       recChunks = [];
     };
-    activeRecorder.start(2000);
+    activeRecorder.start(); // No timeslice: forces browser to naturally chunk at keyframes, fixing all ExoPlayer seeking/scrubbing issues on mobile
+    startKeepAlive();
+    if (window.HMG_REC_SESSION) window.HMG_REC_SESSION.startTs = Date.now();
     $("#btnRec").classList.add("active");
     toast("⏺ Recording started — " + ((activeRecorder.mimeType || mime || "webm").includes("mp4") ? "MP4" : "WebM") + " on this device when you stop", "ok", 5000);
+      if (window.HMGREC && typeof window.HMGREC.paintFrame === "function") {
+        
+    const introTime = 15;
+    const block = document.createElement('div');
+    block.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);color:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui;text-align:center';
+    block.innerHTML = '<h1 style="font-size:3rem;color:#ffb347;margin:0">🎬 RECORDING STARTED</h1><p style="font-size:1.5rem;margin:10px 0">The branded intro is currently being recorded.</p><h2 style="font-size:5rem;margin:20px 0" id="hmgRecCount">' + introTime + '</h2><p style="font-size:1.5rem;color:#10b981">Please WAIT before teaching...</p>';
+    document.body.appendChild(block);
+    let sec = introTime;
+    const int = setInterval(() => {
+      sec--;
+      const cnt = document.getElementById('hmgRecCount');
+      if (cnt) cnt.textContent = sec;
+      if (sec <= 0) {
+        clearInterval(int);
+        block.innerHTML = '<h1 style="font-size:4rem;color:#10b981;margin:0">🎙️ START TEACHING NOW!</h1>';
+        setTimeout(() => block.remove(), 1500);
+      }
+    }, 1000);
+  
+      }
   } catch (e) {
     recorder = null;
     try { recStream.getVideoTracks().forEach((t) => t.stop()); } catch {}
@@ -2094,30 +2234,36 @@ function stopRecording() {
   let si = 0, moved = false;
   let drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
   sv.addEventListener("pointerdown", (e) => {
-    drag = true; moved = false; sv.setPointerCapture(e.pointerId);
+    drag = true; moved = false; 
+    try { sv.setPointerCapture(e.pointerId); } catch(err){}
     sx = e.clientX; sy = e.clientY;
     const r = sv.getBoundingClientRect(); ox = r.left; oy = r.top;
+    e.preventDefault(); // Prevent touch scroll/zoom issues on mobile
   });
-  sv.addEventListener("pointermove", (e) => {
+  window.addEventListener("pointermove", (e) => { // Bind to window so drag doesn't drop if pointer moves too fast
     if (!drag) return;
     if (Math.hypot(e.clientX - sx, e.clientY - sy) > 8) moved = true;
     if (!moved) return;
     sv.style.left = Math.max(2, Math.min(window.innerWidth - sv.offsetWidth - 2, ox + e.clientX - sx)) + "px";
     sv.style.top  = Math.max(2, Math.min(window.innerHeight - sv.offsetHeight - 2, oy + e.clientY - sy)) + "px";
     sv.style.right = "auto"; sv.style.bottom = "auto";
-  });
-  sv.addEventListener("pointerup", () => {
+    e.preventDefault();
+  }, { passive: false });
+  window.addEventListener("pointerup", (e) => {
+    if (!drag) return;
     drag = false;
-    if (!moved) { si = (si + 1) % sizes.length; sv.style.width = sizes[si] + "px"; }
+    try { sv.releasePointerCapture(e.pointerId); } catch(err){}
+    if (!moved && e.target === sv) { si = (si + 1) % sizes.length; sv.style.width = sizes[si] + "px"; }
   });
 })();
 
 /* ---- settings ---- */
-$("#btnSettings").addEventListener("click", () => {
+on("#btnSettings", "click", () => {
   $("#setName").value = Store.get("teachername", "");
   $("#setRoomName").value = Store.get("roomname", "");
   $("#setBroadcast").value = Store.get("broadcast", "composite");
   $("#setQuality").value = Store.get("quality", "1280x720x8");
+  if ($("#setMassBroadcastUrl")) $("#setMassBroadcastUrl").value = Store.get("mass_url", "");
   $("#setWake").checked = Store.get("wake", true);
   if ($("#setPromo")) $("#setPromo").checked = Store.get("promo_broadcast", false);
   if ($("#setSecureInvite")) $("#setSecureInvite").checked = Store.get("secure_invite", false);
@@ -2129,11 +2275,12 @@ $("#btnSettings").addEventListener("click", () => {
   $("#setNewRoom").checked = false;
   openModal("#mSettings");
 });
-$("#setSave").addEventListener("click", () => {
+on("#setSave", "click", () => {
   Store.set("teachername", $("#setName").value.trim());
   Store.set("roomname", $("#setRoomName").value.trim());
   Store.set("broadcast", $("#setBroadcast").value);
   Store.set("quality", $("#setQuality").value);
+  if ($("#setMassBroadcastUrl")) Store.set("mass_url", $("#setMassBroadcastUrl").value.trim());
   Store.set("wake", $("#setWake").checked);
   if ($("#setPromo")) Store.set("promo_broadcast", $("#setPromo").checked);
   if ($("#setSecureInvite")) Store.set("secure_invite", $("#setSecureInvite").checked);
@@ -2193,8 +2340,8 @@ if (Store.get("wasLive", false) && !meetModeCheck()) {
       '<button id="resumeYes" class="btn small ok">▶ Resume class now</button>' +
       '<button id="resumeNo" class="btn small">Dismiss</button>';
     document.body.appendChild(bar);
-    $("#resumeYes").addEventListener("click", () => { Store.set("resume_autoadmit", true); bar.remove(); goLive(); });
-    $("#resumeNo").addEventListener("click", () => { Store.set("wasLive", false); bar.remove(); });
+    on("#resumeYes", "click", () => { Store.set("resume_autoadmit", true); bar.remove(); goLive(); });
+    on("#resumeNo", "click", () => { Store.set("wasLive", false); bar.remove(); });
   }, 800);
 }
 function meetModeCheck() { return new URLSearchParams(location.search).get("meet") === "1"; }
@@ -2255,7 +2402,7 @@ $("#ftPgNext", focusTools).addEventListener("click", () => activeBoards().forEac
 $("#ftPgAdd",  focusTools).addEventListener("click", () => activeBoards().forEach((i) => { i.wb.addPage(); $(".wb-pageinfo", i.el).textContent = (i.wb.pageIndex + 1) + " / " + i.wb.pages.length; }));
 $("#ftLayout", focusTools).addEventListener("click", () => $("#btnLayout").click());
 
-let focusOn = false;
+/* focusOn hoisted */
 function setFocus(on) {
   focusOn = on;
   studioEl.classList.toggle("focus", on);
@@ -2272,12 +2419,12 @@ function setFocus(on) {
   setTimeout(resizeBoards, 200);
   if (on) toast("🎯 Focus mode — toolbars AND browser bars hidden. Tap ☰ (top-left) to come back.", "ok", 4500);
 }
-$("#btnFocus").addEventListener("click", () => setFocus(true));
+on("#btnFocus", "click", () => setFocus(true));
 focusHandle.addEventListener("click", () => setFocus(false));
 
 /* v4 (issue 3): the ⛶ fullscreen button now also hides the platform top menu
    (fullscreen = focus). Exiting fullscreen restores everything. */
-$("#btnFull").addEventListener("click", () => { if (!focusOn) setFocus(true); });
+on("#btnFull", "click", () => { if (!focusOn) setFocus(true); });
 document.addEventListener("fullscreenchange", () => {
   if (!document.fullscreenElement && focusOn) {
     // user pressed Back / system gesture to exit fullscreen → restore toolbars
@@ -2355,9 +2502,9 @@ function mainBoard() {
   return paneState.L.instances.board;
 }
 
-$("#btnLessons").addEventListener("click", () => { renderLessons(); openModal("#mLessons"); });
+on("#btnLessons", "click", () => { renderLessons(); openModal("#mLessons"); });
 
-$("#lessonSave").addEventListener("click", () => {
+on("#lessonSave", "click", () => {
   const name = $("#lessonName").value.trim();
   if (!name) { toast("Give the lesson a name first", "err"); return; }
   const inst = mainBoard();
@@ -2405,9 +2552,9 @@ function renderLessons() {
   }
 }
 
-$("#lessonExport").addEventListener("click", () => mainBoard().wb.exportAllJSON());
-$("#lessonImportBtn").addEventListener("click", () => $("#lessonImportFile").click());
-$("#lessonImportFile").addEventListener("change", async (e) => {
+on("#lessonExport", "click", () => mainBoard().wb.exportAllJSON());
+on("#lessonImportBtn", "click", () => $("#lessonImportFile").click());
+on("#lessonImportFile", "change", async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const text = await f.text();
@@ -2462,7 +2609,7 @@ document.addEventListener("click", (e) => {
 /* ------------------------------------------------------------
    v3.2 Quiz engine with auto-scoring + leaderboard
    ------------------------------------------------------------ */
-$("#btnQuiz").addEventListener("click", () => { refreshQuizBanks(); renderLeaderboard(); toggleDrawer("#drawerQuiz"); });
+on("#btnQuiz", "click", () => { refreshQuizBanks(); renderLeaderboard(); toggleDrawer("#drawerQuiz"); });
 
 function parseQuizText(text) {
   const blocks = text.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
@@ -2484,7 +2631,7 @@ function parseQuizText(text) {
   return questions;
 }
 
-$("#quizStart").addEventListener("click", () => {
+on("#quizStart", "click", () => {
   if (!room) { toast("Go live first (▶ Go Live) — quizzes run over the built-in classroom.", "err", 5000); return; }
   const questions = parseQuizText($("#quizText").value);
   if (!questions.length) { toast("No valid questions. Mark the correct option with * and separate questions with a blank line.", "err", 6000); return; }
@@ -2499,11 +2646,11 @@ $("#quizStart").addEventListener("click", () => {
   toast("🏆 Quiz started — " + questions.length + " question(s)", "ok");
 });
 
-$("#quizNext").addEventListener("click", () => {
+on("#quizNext", "click", () => {
   if (!room) return;
   if (!room.nextQuizQuestion()) toast("That was the last question — tap End quiz.", "", 4000);
 });
-$("#quizEnd").addEventListener("click", () => {
+on("#quizEnd", "click", () => {
   if (!room) return;
   const board = room.endQuiz();
   $("#quizSetup").classList.remove("hide");
@@ -2511,11 +2658,11 @@ $("#quizEnd").addEventListener("click", () => {
   renderLeaderboard();
   if (board && board.length) toast("🏆 Quiz over! Top: " + board[0].name + " (" + board[0].score + " pts)", "ok", 6000);
 });
-$("#scoreReset").addEventListener("click", () => {
+on("#scoreReset", "click", () => {
   if (room) { room.resetScores(); renderLeaderboard(); toast("Scores reset"); }
 });
 /* v6: gradebook export — per-student score CSV for records/parents */
-$("#scoreExport").addEventListener("click", () => {
+on("#scoreExport", "click", () => {
   const dataRoom = room || lastEndedRoom;
   if (!dataRoom) { toast("Go live first"); return; }
   const rows = [["Rank", "Student", "Score", "Room", "Date"]];
@@ -2560,7 +2707,7 @@ function refreshQuizBanks() {
   sel.innerHTML = '<option value="">Load saved…</option>' +
     Object.keys(banks).map((n) => `<option>${escapeHtml(n)}</option>`).join("");
 }
-$("#quizSaveBank").addEventListener("click", () => {
+on("#quizSaveBank", "click", () => {
   const name = $("#quizTitle").value.trim() || "Untitled quiz";
   const saved = Store.get("quizbanks", {});
   const banks = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
@@ -2569,7 +2716,7 @@ $("#quizSaveBank").addEventListener("click", () => {
   refreshQuizBanks();
   toast("💾 Question bank saved: " + name, "ok");
 });
-$("#quizBankSel").addEventListener("change", (e) => {
+on("#quizBankSel", "change", (e) => {
   const saved = Store.get("quizbanks", {});
   const banks = saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
   const b = banks[e.target.value];
@@ -2629,8 +2776,8 @@ function csvToQuestions(text) {
   return { questions: out, errors };
 }
 
-$("#quizCsvBtn").addEventListener("click", () => $("#quizCsvFile").click());
-$("#quizCsvFile").addEventListener("change", async (e) => {
+on("#quizCsvBtn", "click", () => $("#quizCsvFile").click());
+on("#quizCsvFile", "change", async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   e.target.value = "";
@@ -2653,7 +2800,7 @@ $("#quizCsvFile").addEventListener("change", async (e) => {
     $("#quizCsvStatus").textContent = "❌ Could not read the file: " + err.message;
   }
 });
-$("#quizCsvTemplate").addEventListener("click", () => {
+on("#quizCsvTemplate", "click", () => {
   const sample =
 'Question,A,B,C,D,Correct option,Explanation/working\n' +
 '"What is 54 ÷ 6?",9,8,7,6,A,"54 ÷ 6 = 9 because 6 × 9 = 54"\n' +
@@ -2703,7 +2850,7 @@ let calcExpr = "", calcAns = 0, calcMem = 0, calcDeg = true, calc2nd = false;
   });
 })();
 
-$("#calcDeg").addEventListener("click", (e) => {
+on("#calcDeg", "click", (e) => {
   calcDeg = !calcDeg;
   e.currentTarget.textContent = calcDeg ? "DEG" : "RAD";
   toast("Angles in " + (calcDeg ? "degrees" : "radians"));
@@ -2787,8 +2934,8 @@ function calcPress(k, btn) {
   }
   disp.value = calcExpr || "0";
 }
-$("#btnCalc").addEventListener("click", () => $("#calcBox").classList.toggle("hide"));
-$("#calcClose").addEventListener("click", () => $("#calcBox").classList.add("hide"));
+on("#btnCalc", "click", () => $("#calcBox").classList.toggle("hide"));
+on("#calcClose", "click", () => $("#calcBox").classList.add("hide"));
 (function dragCalc() {
   const box = $("#calcBox"), head = $("#calcDrag");
   let drag = false, sx = 0, sy = 0, ox = 0, oy = 0;
@@ -2818,7 +2965,7 @@ function buildReport() {
   const dur = s.start ? fmtTime((endAt - s.start) / 1000) : "—";
   const lb = dataRoom.leaderboard();
   const lines = [
-    "HMG ClassDeck — Class report",
+    "HMG ACADEMY CLASS DECK — Class report",
     "Generated: " + nowStamp(),
     "Room: " + dataRoom.code + (dataRoom.roomName ? "  (" + dataRoom.roomName + ")" : ""),
     "",
@@ -2842,11 +2989,11 @@ function buildReport() {
   ];
   return lines.join("\n");
 }
-$("#btnReport").addEventListener("click", () => {
+on("#btnReport", "click", () => {
   $("#reportBody").innerHTML = "<pre style='white-space:pre-wrap;font-size:12.5px'>" + escapeHtml(buildReport()) + "</pre>";
   openModal("#mReport");
 });
-$("#reportDownload").addEventListener("click", () => {
+on("#reportDownload", "click", () => {
   downloadBlob(new Blob([buildReport()], { type: "text/plain" }), "class-report-" + currentRoomCode() + "-" + Date.now() + ".txt");
 });
 function buildWhatsAppSummary() {
@@ -2856,7 +3003,7 @@ function buildWhatsAppSummary() {
   const lb = dataRoom.leaderboard().slice(0, 5);
   const endAt = room ? Date.now() : (s.end || Date.now());
   return [
-    "HMG ClassDeck class summary",
+    "HMG ACADEMY CLASS DECK class summary",
     "Room: " + dataRoom.code,
     dataRoom.roomName ? ("Class: " + dataRoom.roomName) : "",
     "Duration: " + (s.start ? fmtTime((endAt - s.start) / 1000) : "—"),
@@ -2867,7 +3014,7 @@ function buildWhatsAppSummary() {
     "Generated: " + nowStamp()
   ].filter(Boolean).join("\n");
 }
-$("#reportWhatsApp").addEventListener("click", () => {
+on("#reportWhatsApp", "click", () => {
   const msg = encodeURIComponent(buildWhatsAppSummary());
   window.open("https://wa.me/?text=" + msg, "_blank", "noopener");
 });
@@ -2885,11 +3032,11 @@ $("#reportWhatsApp").addEventListener("click", () => {
     if ($("#setWatermark")) $("#setWatermark").checked = Store.get("security_watermark", true);
     if ($("#setAutoPiP")) $("#setAutoPiP").checked = Store.get("auto_pip_reminder", false);
   });
-  $("#setSave").addEventListener("click", () => {
+  on("#setSave", "click", () => {
     const pin = $("#setPin").value.trim();
     Store.set("pin", pin);
     if (room) room.pin = pin;
-    const brand = $("#setBrand").value.trim() || "HMG ClassDeck";
+    const brand = $("#setBrand").value.trim() || "HMG ACADEMY CLASS DECK";
     Store.set("brand", brand);
     const accent = $("#setAccent").value;
     Store.set("accent", accent);
@@ -2905,9 +3052,9 @@ $("#reportWhatsApp").addEventListener("click", () => {
     }
     applyBranding();
   });
-  $("#setAccentReset").addEventListener("click", () => { $("#setAccent").value = "#ffb347"; });
+  on("#setAccentReset", "click", () => { $("#setAccent").value = "#ffb347"; });
 
-  $("#setBackup").addEventListener("click", () => {
+  on("#setBackup", "click", () => {
     const dump = {};
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -2917,8 +3064,8 @@ $("#reportWhatsApp").addEventListener("click", () => {
       { type: "application/json" }), "classdeck-backup-" + Date.now() + ".json");
     toast("⬇ Backup downloaded — keep it somewhere safe", "ok");
   });
-  $("#setRestoreBtn").addEventListener("click", () => $("#setRestoreFile").click());
-  $("#setRestoreFile").addEventListener("change", async (e) => {
+  on("#setRestoreBtn", "click", () => $("#setRestoreFile").click());
+  on("#setRestoreFile", "change", async (e) => {
     const f = e.target.files[0];
     if (!f) return;
     try {
@@ -2943,7 +3090,7 @@ applyBranding();
 
 /* v5: PIN is now applied inside goLive() itself (race-free). Changing the PIN
    in Settings while live applies immediately too: */
-$("#setSave").addEventListener("click", () => { if (room) room.pin = Store.get("pin", ""); });
+on("#setSave", "click", () => { if (room) room.pin = Store.get("pin", ""); });
 
 /* branding in the composite watermark */
 const _origDrawComposite = drawComposite;
@@ -2966,7 +3113,7 @@ drawComposite = function () {
    v4: Zoom/Meet-style classroom controls
    (waiting room, mute-all, spotlight, emoji reactions)
    ------------------------------------------------------------ */
-$("#btnWaiting").addEventListener("click", () => {
+on("#btnWaiting", "click", () => {
   if (!room) { toast("Go live first"); return; }
   room.setWaitingRoom(!room.waitingRoom);
   Store.set("waitroom", room.waitingRoom);
@@ -2976,7 +3123,7 @@ $("#btnWaiting").addEventListener("click", () => {
     ? "🚪 Waiting room ON — new students will stay in the lobby until you admit them."
     : "✅ Waiting room OFF — students will join directly.");
 });
-$("#btnMuteAll").addEventListener("click", () => {
+on("#btnMuteAll", "click", () => {
   if (!room) return;
   room.muteAllStudents();
   $$('#rosterList [data-act="mic"]').forEach((b) => b.classList.remove("active"));
@@ -3107,9 +3254,9 @@ function openStreamCentre() {
 function downloadObsNotes() {
   downloadBlob(new Blob([obsSetupText()], { type: "text/plain" }), "classdeck-obs-social-live-setup.txt");
 }
-if ($("#btnOpenStreamCentre")) $("#btnOpenStreamCentre").addEventListener("click", openStreamCentre);
-if ($("#btnOpenCleanOutput")) $("#btnOpenCleanOutput").addEventListener("click", () => window.open(cleanOutputUrl(), "_blank", "noopener"));
-if ($("#btnObsSetup")) $("#btnObsSetup").addEventListener("click", downloadObsNotes);
+if ($("#btnOpenStreamCentre")) on("#btnOpenStreamCentre", "click", openStreamCentre);
+if ($("#btnOpenCleanOutput")) on("#btnOpenCleanOutput", "click", () => window.open(cleanOutputUrl(), "_blank", "noopener"));
+if ($("#btnObsSetup")) on("#btnObsSetup", "click", downloadObsNotes);
 
 
 /* Noise meter: free local mic analyser, painted into broadcast when active. */
@@ -3170,10 +3317,10 @@ function drawNoiseOverlay(ctx, W, H) {
   ctx.textAlign = "right"; ctx.fillText(Math.round(noiseLevel) + "%", x + bw - 10, y + bh / 2); ctx.textAlign = "left";
   ctx.restore();
 }
-if ($("#btnNoiseMeter")) $("#btnNoiseMeter").addEventListener("click", () => { $("#noiseThreshold").value = noiseThreshold; openModal("#mNoise"); });
-if ($("#noiseStart")) $("#noiseStart").addEventListener("click", startNoiseMeter);
-if ($("#noiseStop")) $("#noiseStop").addEventListener("click", stopNoiseMeter);
-if ($("#noiseThreshold")) $("#noiseThreshold").addEventListener("input", (e) => { noiseThreshold = Number(e.target.value); Store.set("noise_threshold", noiseThreshold); });
+if ($("#btnNoiseMeter")) on("#btnNoiseMeter", "click", () => { $("#noiseThreshold").value = noiseThreshold; openModal("#mNoise"); });
+if ($("#noiseStart")) on("#noiseStart", "click", startNoiseMeter);
+if ($("#noiseStop")) on("#noiseStop", "click", stopNoiseMeter);
+if ($("#noiseThreshold")) on("#noiseThreshold", "input", (e) => { noiseThreshold = Number(e.target.value); Store.set("noise_threshold", noiseThreshold); });
 const _drawCompositeBeforeNoise = drawComposite;
 drawComposite = function () { _drawCompositeBeforeNoise(); if (noiseOn) drawNoiseOverlay(COMP.ctx, COMP.w, COMP.h); };
 
@@ -3184,7 +3331,7 @@ drawComposite = function () { _drawCompositeBeforeNoise(); if (noiseOn) drawNois
    This module publishes the ClassDeck composite MediaStream to a WebRTC WHIP
    relay (included in relay/no-obs-social-relay). The relay converts to RTMP.
    ------------------------------------------------------------ */
-let tabletLive = { pc: null, stream: null, resource: "", gateway: "", streamName: "classdeck", format: "landscape", raf: null, canvas: null, ownsComposite: false };
+tabletLive = { pc: null, stream: null, resource: "", gateway: "", streamName: "classdeck", format: "landscape", raf: null, canvas: null, ownsComposite: false };
 function tlSetStatus(msg, ok) {
   const el = $("#tlStatus"); if (el) { el.textContent = msg; el.style.color = ok ? "var(--ok)" : "var(--text-dim)"; }
 }
@@ -3250,7 +3397,7 @@ function createVerticalSocialStream(fps) {
     ctx.fillStyle = "#eef1ff"; ctx.font = "22px system-ui"; ctx.textAlign = "left";
     ctx.fillText("Live class with Adewale Samson Adeagbo", 32, 1070, 656);
     ctx.fillStyle = "#9aa3cf"; ctx.font = "17px system-ui";
-    ctx.fillText("HMG Academy · HMG Concepts · Lagos, Nigeria", 32, 1102, 656);
+    ctx.fillText("HMG ACADEMY · HMG Concepts · Lagos, Nigeria", 32, 1102, 656);
     ctx.fillStyle = "rgba(255,255,255,.08)"; ctx.fillRect(32, 1140, 656, 1);
     ctx.fillStyle = "#ffb347"; ctx.font = "bold 18px system-ui"; ctx.textAlign = "center";
     ctx.fillText("Learning Deliberately. Teaching Authentically.", 360, 1194, 650);
@@ -3391,18 +3538,18 @@ async function tryFullTabletScreenShare() {
     s.getVideoTracks()[0].addEventListener("ended", () => { toast("Full screen share ended — switching back to ClassDeck workspace", "err"); startCompositeStage(); });
   } catch (e) { toast("Screen share cancelled/unavailable. Using ClassDeck workspace broadcast.", "err", 6000); }
 }
-if ($("#btnTabletLive")) $("#btnTabletLive").addEventListener("click", () => {
+if ($("#btnTabletLive")) on("#btnTabletLive", "click", () => {
   if (typeof authEnforce === "function" && !authEnforce()) return;
   tlLoadSettings(); openModal("#mTabletLive");
 });
-if ($("#tlStart")) $("#tlStart").addEventListener("click", startTabletSocialLive);
-if ($("#tlStop")) $("#tlStop").addEventListener("click", () => stopTabletSocialLive(false));
-if ($("#tlHealth")) $("#tlHealth").addEventListener("click", checkRelayHealth);
-if ($("#tlOpenCentre")) $("#tlOpenCentre").addEventListener("click", openStreamCentre);
-if ($("#btnTryScreenShare")) $("#btnTryScreenShare").addEventListener("click", tryFullTabletScreenShare);
+if ($("#tlStart")) on("#tlStart", "click", startTabletSocialLive);
+if ($("#tlStop")) on("#tlStop", "click", () => stopTabletSocialLive(false));
+if ($("#tlHealth")) on("#tlHealth", "click", checkRelayHealth);
+if ($("#tlOpenCentre")) on("#tlOpenCentre", "click", openStreamCentre);
+if ($("#btnTryScreenShare")) on("#btnTryScreenShare", "click", tryFullTabletScreenShare);
 
 /* Free speech-to-text captions: browser Web Speech API only (no paid AI/API). */
-let capRec = null, capOn = false, capLines = [];
+/* captions hoisted */
 function releaseTeacherMicIfUnused() {
   if (room || recorder || capOn || (tabletLive && tabletLive.pc)) return;
   try { if (micStream) micStream.getTracks().forEach((t) => t.stop()); } catch {}
@@ -3462,8 +3609,8 @@ function startCaptions() {
     capRec.start();
   } catch (e) { toast("Could not start captions: " + e.message, "err", 6000); }
 }
-if ($("#btnCaptions")) $("#btnCaptions").addEventListener("click", () => capOn ? stopCaptions() : startCaptions());
-if ($("#btnTranscript")) $("#btnTranscript").addEventListener("click", () => {
+if ($("#btnCaptions")) on("#btnCaptions", "click", () => capOn ? stopCaptions() : startCaptions());
+if ($("#btnTranscript")) on("#btnTranscript", "click", () => {
   const body = capLines.length ? capLines.map((l) => "[" + l.time + "] " + l.text).join("\n") : "No caption transcript yet.";
   downloadBlob(new Blob([body], { type: "text/plain" }), "classdeck-caption-transcript-" + currentRoomCode() + "-" + Date.now() + ".txt");
 });
@@ -3484,7 +3631,7 @@ function auditCSV() {
   const rows = [["Time", "Event", "Detail", "Room", "Device"], ...securityAudit.map((r) => [r.time, r.event, r.detail, r.room, r.device])];
   return rows.map((r) => r.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
 }
-if ($("#btnAuditCSV")) $("#btnAuditCSV").addEventListener("click", () => {
+if ($("#btnAuditCSV")) on("#btnAuditCSV", "click", () => {
   downloadBlob(new Blob([auditCSV()], { type: "text/csv" }), "classdeck-security-audit-" + currentRoomCode() + "-" + Date.now() + ".csv");
 });
 
@@ -3506,7 +3653,7 @@ drawComposite = function () { _drawCompositeBeforeSecurityWatermark(); drawForen
 
 /* PiP continuity: the browser requires a user gesture; once started, the app
    keeps a small live preview when the teacher switches/minimises. */
-let pipVideo = null, pipStream = null, pipPump = null, pipActive = false;
+/* pip hoisted */
 function ensurePipVideo() {
   if (pipVideo) return pipVideo;
   pipVideo = document.createElement("video");
@@ -3535,7 +3682,7 @@ async function enterClassDeckPiP() {
     await v.requestPictureInPicture();
     pipActive = true; startPipPump();
     if ("mediaSession" in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({ title: "HMG ClassDeck live lesson", artist: "Adewale Samson Adeagbo · HMG Academy" });
+      navigator.mediaSession.metadata = new MediaMetadata({ title: "HMG ACADEMY CLASS DECK live lesson", artist: "Adewale Samson Adeagbo · HMG ACADEMY" });
     }
     $("#btnPiP")?.classList.add("active");
     audit("pip-start", "Teacher started Picture-in-Picture continuity preview");
@@ -3556,7 +3703,7 @@ async function exitClassDeckPiP() {
   try { if (document.pictureInPictureElement && document.exitPictureInPicture) await document.exitPictureInPicture(); } catch {}
   if (!document.pictureInPictureElement) disposePipPreview();
 }
-if ($("#btnPiP")) $("#btnPiP").addEventListener("click", () => document.pictureInPictureElement ? exitClassDeckPiP() : enterClassDeckPiP());
+if ($("#btnPiP")) on("#btnPiP", "click", () => document.pictureInPictureElement ? exitClassDeckPiP() : enterClassDeckPiP());
 document.addEventListener("leavepictureinpicture", () => {
   pipActive = false;
   $("#btnPiP")?.classList.remove("active");
@@ -3640,23 +3787,23 @@ if (new URLSearchParams(location.search).get("rec") === "1") {
    ------------------------------------------------------------ */
 const stuBoards = new Map();   // peerId -> {canvas, ctx, name}
 
-$("#btnBoards").addEventListener("click", () => toggleDrawer("#drawerBoards"));
+on("#btnBoards", "click", () => toggleDrawer("#drawerBoards"));
 
-$("#boardsStart").addEventListener("click", () => {
+on("#boardsStart", "click", () => {
   if (!room) { toast("Go live first (▶ Go Live)", "err"); return; }
   room.startBoards(currentBoardPNG());
   $("#boardsStart").classList.add("hide");
   $("#boardsStop").classList.remove("hide");
   toast("🎨 Student boards ON — answers appear below as they draw", "ok", 5000);
 });
-$("#boardsStop").addEventListener("click", () => {
+on("#boardsStop", "click", () => {
   if (room) room.stopBoards();
   $("#boardsStop").classList.add("hide");
   $("#boardsStart").classList.remove("hide");
   stuBoards.clear();
   $("#boardsGrid").innerHTML = "";
 });
-$("#boardsPush").addEventListener("click", () => {
+on("#boardsPush", "click", () => {
   if (!room || !room.boardsOn) { toast("Start boards first"); return; }
   const png = currentBoardPNG();
   if (png) { room.pushBoardBg(png); toast("📤 Your board pushed to all students", "ok"); }
@@ -3711,9 +3858,9 @@ function renderStudentBoard(p) {
    v8.2 ACTIVITIES (Mentimeter/Pear Deck style)
    open question | live word cloud | exit ticket
    ------------------------------------------------------------ */
-$("#btnActivity").addEventListener("click", () => toggleDrawer("#drawerActivity"));
+on("#btnActivity", "click", () => toggleDrawer("#drawerActivity"));
 
-$("#actStart").addEventListener("click", () => {
+on("#actStart", "click", () => {
   if (!room) { toast("Go live first", "err"); return; }
   const kind = $("#actKind").value;
   let prompt = $("#actPrompt").value.trim();
@@ -3735,8 +3882,8 @@ function endActivity(share) {
   $("#actLive").classList.add("hide");
   toast(share ? "Results shown to the class" : "Activity ended");
 }
-$("#actEndShare").addEventListener("click", () => endActivity(true));
-$("#actEndQuiet").addEventListener("click", () => endActivity(false));
+on("#actEndShare", "click", () => endActivity(true));
+on("#actEndQuiet", "click", () => endActivity(false));
 
 function renderActivityResp(p) {
   $("#actCount").textContent = p.count;
@@ -3792,7 +3939,7 @@ function attachAwardButtons() {
     name.after(wrap);
   });
 }
-$("#btnBehaviorCSV").addEventListener("click", () => {
+on("#btnBehaviorCSV", "click", () => {
   const dataRoom = room || lastEndedRoom;
   if (!dataRoom) { toast("Go live first"); return; }
   downloadBlob(new Blob([dataRoom.behaviorCSV()], { type: "text/csv" }),
@@ -3802,7 +3949,7 @@ $("#btnBehaviorCSV").addEventListener("click", () => {
 /* ------------------------------------------------------------
    v8.4 GROUP MAKER (ClassDojo/ClassIn style)
    ------------------------------------------------------------ */
-$("#btnGroups").addEventListener("click", () => {
+on("#btnGroups", "click", () => {
   if (!room) { toast("Go live first (▶ Go Live)", "err"); return; }
   if (room.students.size < 2) { toast("Need at least 2 students online to create groups", "err"); return; }
   const n = Math.min(room.students.size, Math.max(2, Number(prompt("How many groups?", "2")) || 2));
@@ -3844,13 +3991,13 @@ onRoomEvent = function (type, p) {
   drawRecordingFrame = function () {
     const S = window.HMG_REC_SESSION;
     const hasHmg = !!window.HMGREC && typeof HMGREC.paintFrame === "function";
-    /* Intro & outro phases fully replace the frame */
-    if (hasHmg && S && S.startTs && HMGREC.paintFrame(window.recCanvas, window.recCtx)) {
-      /* Also draw CBT link overlay during intro */
+    /* Intro & outro phases fully replace the frame (Standalone) */
+    if (hasHmg && S && S.startTs && HMGREC.paintFrame(recCanvas, recCtx)) {
       try {
         var cbtUrl = localStorage.getItem("hmg_cbt_link") || "";
-        if (cbtUrl && typeof window.drawCBTOverlay === "function" && window.recCtx && window.recCanvas) {
-          window.drawCBTOverlay(window.recCtx, window.recCanvas.width, window.recCanvas.height, cbtUrl);
+        if (cbtUrl && typeof window.drawCBTOverlay === "function" && recCtx && recCanvas) {
+          // window.drawCBTOverlay(recCtx, recCanvas.width, recCanvas.height, cbtUrl);
+          // (Actually, if it's standalone, maybe we don't draw the CBT link over the intro/outro)
         }
       } catch(e) {}
       return;
@@ -3859,15 +4006,15 @@ onRoomEvent = function (type, p) {
     _origRecordFrame();
     /* Overlays: lower thirds + staff credentials popup + text ads */
     try {
-      if (hasHmg && window.recCtx && window.recCanvas &&
+      if (hasHmg && recCtx && recCanvas &&
           typeof HMGREC.overlayFrame === "function") {
-        HMGREC.overlayFrame(window.recCtx, window.recCanvas.width, window.recCanvas.height);
+        HMGREC.overlayFrame(recCtx, recCanvas.width, recCanvas.height);
       }
       /* CBT link */
       try {
         var cbtUrl = localStorage.getItem("hmg_cbt_link") || "";
-        if (cbtUrl && typeof window.drawCBTOverlay === "function" && window.recCtx && window.recCanvas) {
-          window.drawCBTOverlay(window.recCtx, window.recCanvas.width, window.recCanvas.height, cbtUrl);
+        if (cbtUrl && typeof window.drawCBTOverlay === "function" && recCtx && recCanvas) {
+          window.drawCBTOverlay(recCtx, recCanvas.width, recCanvas.height, cbtUrl);
         }
       } catch(e) {}
     } catch (e) { /* overlays must never break the recorder */ }
@@ -3882,34 +4029,53 @@ onRoomEvent = function (type, p) {
     const hasHmg = !!window.HMGREC && typeof HMGREC.drawOutroFrame === "function";
     if (hasHmg && S && S.startTs && !S.ending && !S.ending) {
       S.ending = true;
+      S.endTs = Date.now();
+      try {
+        const block = document.createElement('div');
+        block.id = "hmgRecOutroBlock";
+        block.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.9);color:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui;text-align:center';
+        block.innerHTML = '<h1 style="font-size:3rem;color:#ffb347;margin:0">🎬 FINISHING RECORDING</h1><p style="font-size:1.5rem;margin:10px 0">The branded outro is being attached. Please wait.</p><h2 style="font-size:5rem;margin:20px 0" id="hmgRecOutroCount">15</h2>';
+        document.body.appendChild(block);
+        let outroT = 15;
+        const iv = setInterval(() => {
+           outroT--;
+           const c = document.getElementById("hmgRecOutroCount");
+           if (c) c.textContent = outroT;
+           if (outroT <= 0) clearInterval(iv);
+        }, 1000);
+      } catch(e) {}
       const flyerMs = S.showFlyerMs || 3000;
-      const outroMs = S.outroMs || 4000;
-      const totalEndMs = flyerMs + outroMs;
+      const outroMs = S.outroMs || 15000;
+      const totalEndMs = 15000;
       const endDeadline = Date.now() + totalEndMs;
       (function endLoop() {
         var remaining = endDeadline - Date.now();
-        if (remaining > 0 && window.recCanvas && window.recCtx) {
+        if (remaining > 0 && recCanvas && recCtx) {
           try {
-            var W = window.recCanvas.width, H = window.recCanvas.height;
-            /* Show flyer for first flyerMs seconds, then outro */
-            if (remaining > outroMs && window.HMGFlyer && typeof HMGFlyer.draw === "function") {
-              HMGFlyer.draw(window.recCtx, W, H);
-            } else {
-              HMGREC.drawOutroFrame(window.recCanvas, window.recCtx, W, H);
-            }
-            /* CBT link if available */
-            var cbtUrl = localStorage.getItem("hmg_cbt_link") || "";
-            if (cbtUrl && typeof window.drawCBTOverlay === "function") {
-              window.drawCBTOverlay(window.recCtx, W, H, cbtUrl);
-            }
-          } catch (e) {}
+            var W = recCanvas.width, H = recCanvas.height;
+            HMGREC.drawOutroFrame(recCanvas, recCtx, W, H, Date.now() - S.endTs);
+                      } catch (e) {}
           requestAnimationFrame(endLoop);
           return;
         }
+        try { const b = document.getElementById("hmgRecOutroBlock"); if(b) b.remove(); } catch(e){}
+        // GENERATE THUMBNAIL OF SCENE 2 FOR SOCIAL MEDIA
+        try {
+           const thumbCanvas = document.createElement("canvas");
+           thumbCanvas.width = W || 1280;
+           thumbCanvas.height = H || 720;
+           const tctx = thumbCanvas.getContext("2d");
+           // draw Intro Frame at 10,000ms (10s) which is perfectly in the middle of Scene 2 (Teacher/Subject)
+           HMGREC.drawIntroFrame(thumbCanvas, tctx, thumbCanvas.width, thumbCanvas.height, 10000);
+           thumbCanvas.toBlob((blob) => {
+             downloadBlob(blob, "Thumbnail_" + Date.now() + ".jpg");
+           }, "image/jpeg", 0.95);
+        } catch(e) {}
         _origStopRec();
       })();
       return;
     }
+    try { const b = document.getElementById("hmgRecOutroBlock"); if(b) b.remove(); } catch(e){}
     _origStopRec();
   };
 
@@ -3925,3 +4091,47 @@ onRoomEvent = function (type, p) {
     } catch (e) { /* never break the broadcast */ }
   };
 })();
+
+/* V37 — export studio APIs for toolbar-fix / portal bridge */
+try {
+  window.setFocus = typeof setFocus === 'function' ? setFocus : window.setFocus;
+  window.goLive = typeof goLive === 'function' ? goLive : window.goLive;
+  window.endLive = typeof endLive === 'function' ? endLive : window.endLive;
+  window.toggleDrawer = typeof toggleDrawer === 'function' ? toggleDrawer : window.toggleDrawer;
+  window.openModal = typeof openModal === 'function' ? openModal : window.openModal;
+  window.closeModal = typeof closeModal === 'function' ? closeModal : window.closeModal;
+  window.swapPanes = typeof swapPanes === 'function' ? swapPanes : window.swapPanes;
+  window.applyLayout = typeof applyLayout === 'function' ? applyLayout : window.applyLayout;
+  window.enterClassDeckPiP = typeof enterClassDeckPiP === 'function' ? enterClassDeckPiP : window.enterClassDeckPiP;
+  window.exitClassDeckPiP = typeof exitClassDeckPiP === 'function' ? exitClassDeckPiP : window.exitClassDeckPiP;
+  window.startRecording = typeof startRecording === 'function' ? startRecording : window.startRecording;
+  window.stopRecording = typeof stopRecording === 'function' ? stopRecording : window.stopRecording;
+  window.renderRoster = typeof renderRoster === 'function' ? renderRoster : window.renderRoster;
+  window.renderWaiting = typeof renderWaiting === 'function' ? renderWaiting : window.renderWaiting;
+  window.renderLessons = typeof renderLessons === 'function' ? renderLessons : window.renderLessons;
+  window.refreshQuizBanks = typeof refreshQuizBanks === 'function' ? refreshQuizBanks : window.refreshQuizBanks;
+  window.renderLeaderboard = typeof renderLeaderboard === 'function' ? renderLeaderboard : window.renderLeaderboard;
+  window.focusOn = typeof focusOn !== 'undefined' ? focusOn : false;
+} catch (e) { console.warn('[deck exports]', e); }
+
+
+/* ============================================================================
+   V38 — READY FLAG
+   teach.js reached the end of the file without aborting, which means every
+   toolbar listener above is bound and every top-level const is initialised.
+   js/teach-toolbar-fix.js is a FALLBACK toolbar written while this file was
+   dying at line ~1824; it binds the same buttons in the CAPTURE phase. With
+   teach.js healthy, both handlers fire for one click — swapPanes() ran twice
+   (net zero, "Swap does nothing") and layout skipped a mode. This flag lets
+   the fallback stand down. If teach.js ever aborts again, the flag is never
+   set and the fallback takes over exactly as before.
+   ========================================================================== */
+window.__DECK_TEACH_READY__ = true;
+console.info('[deck] teach.js initialised cleanly — fallback toolbar standing down.');
+
+  // WATCHDOG: Social Media truncation fix. 
+  setInterval(() => {
+    if (recorder && recorder.state === "recording" && typeof drawRecordingFrame === "function") {
+       drawRecordingFrame();
+    }
+  }, 250);

@@ -1,5 +1,5 @@
 /* ============================================================
-   HMG ClassDeck — Live classroom engine (PeerJS / WebRTC)
+   HMG ACADEMY CLASS DECK — Live classroom engine (PeerJS / WebRTC)
    100% free: uses the public PeerJS cloud broker + Google STUN.
    No backend server. Teacher is the "hub"; students connect
    directly to the teacher (mesh-star topology).
@@ -57,6 +57,7 @@ const PEER_CONFIG = {
 class TeacherRoom {
   constructor(roomCode, opts = {}) {
     this.code = roomCode;
+    this.massUrl = opts.massUrl || null;
     this.onEvent = opts.onEvent || (() => {});       // (type, payload)
     this.stageStream = null;                          // composed canvas + mic
     this.camStream = null;                            // teacher camera
@@ -196,6 +197,13 @@ class TeacherRoom {
     conn.send({ t: "welcome", roomName: this.roomName || this.code, count: this.students.size, rejoined: !!(conn.metadata && conn.metadata.rejoin) });
     this._broadcastRoster();
     this.onEvent("student-joined", { peerId: conn.peer, name });
+    
+    // Mass Broadcast URL - push embedded iframe string if provided
+    if (this.massUrl) {
+      conn.send({ t: "mass_broadcast", url: this.massUrl });
+      return; // Skip sending heavy WebRTC Media Streams!
+    }
+
     // push current stage + cam to the newcomer
     if (this.stageStream) this._callStudent(conn.peer, this.stageStream, "stage");
     if (this.camStream)   this._callStudent(conn.peer, this.camStream, "teachercam");
@@ -760,6 +768,7 @@ class StudentRoom {
       case "activityResults": this.onEvent("activityResults", d); break; // v8
       case "award":     this.onEvent("award", d); break;             // v8
       case "group":     this.onEvent("group", d); break;             // v8
+      case "mass_broadcast": this.onEvent("mass_broadcast", d); break;
     }
   }
 

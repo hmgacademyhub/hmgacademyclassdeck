@@ -1,8 +1,13 @@
 /* ============================================================
-   HMG ACADEMY CLASS DECK — Deployment Configuration
+   HMG ACADEMY CLASS DECK — Deployment Configuration (V36 engine)
    ------------------------------------------------------------
-   Set your platform preferences here. This file is committed to
-   your GitHub repository and controls your own HMG ClassDeck.
+   This file merges BOTH configuration systems:
+   1) The original HMG ACADEMY CLASS DECK blocks (HMG_OWNER,
+      HMG_BRAND, HMG_RECORDING_DEFAULTS) — fully preserved.
+   2) The newer CLASSDECK.BRAND block introduced by the enhanced
+      Tutoring Connect / Adewale Class Deck engine, consumed by
+      enhancements.js, portal-bridge.js and generator.js.
+   Edit values here; committed to your GitHub repository.
    ============================================================ */
 
 window.HMG_OWNER = {
@@ -17,7 +22,7 @@ window.HMG_OWNER = {
 };
 
 window.HMG_BRAND = {
-  /* Branding shown on recordings, intro, aluno & broadcast watermark. */
+  /* Branding shown on recordings, intro, and broadcast watermark. */
   name: "HMG ACADEMY CLASS DECK",
   shortName: "HMG ClassDeck",
   motto: "Learning Deliberately. Teaching Authentically.",
@@ -36,3 +41,37 @@ window.HMG_RECORDING_DEFAULTS = {
   staffPulseSeconds: 30,
   footer: "Learning Deliberately. Teaching Authentically."
 };
+
+/* ------------------------------------------------------------
+   Enhanced-engine brand block (V36) — consumed by
+   enhancements.js (recording watermark), portal-bridge.js
+   (theme + optional portal chip) and js/generator.js.
+   ------------------------------------------------------------ */
+window.CLASSDECK = window.CLASSDECK || {};
+window.CLASSDECK.BRAND = {
+  productName: 'HMG ACADEMY CLASS DECK',
+  shortName: 'HMG ClassDeck',
+  studioName: 'HMG ACADEMY',
+  tagline: 'Teach live inside HMG ACADEMY — whiteboard, materials and learners in one place.',
+  founder: 'Adewale Samson Adeagbo',
+  ecosystem: 'HMG Concepts Ecosystem',
+  email: 'hmgconcepts@gmail.com',
+  whatsapp: 'https://wa.me/2348100866322',
+  siteUrl: 'https://hmgacademyclassdeck.vercel.app',
+  /* STANDALONE DECK: no parent portal. portal-bridge.js checks
+     these flags and leaves the original auth gate in charge. */
+  standalone: true,
+  parentPortal: '',
+  portalSessions: '',
+  portalCalendar: '',
+  portalLogin: '',
+  logoUrl: 'assets/hmg-academy-logo.png',
+  primary: '#1e2a78',
+  accent: '#ffb347',
+  requirePortalSession: false,
+  studentJoinFree: true
+};
+window.CD_CONFIG = Object.assign({}, window.CD_CONFIG || {}, window.CLASSDECK.BRAND);
+window.APP_NAME = window.CLASSDECK.BRAND.productName;
+window.SCHOOL_NAME = window.CLASSDECK.BRAND.studioName;
+console.log('[HMG ACADEMY CLASS DECK] config loaded — standalone mode, owner account active');

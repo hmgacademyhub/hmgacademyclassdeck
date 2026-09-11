@@ -1,5 +1,5 @@
 /* ============================================================
-   HMG ClassDeck — Student view controller
+   HMG ACADEMY CLASS DECK — Student view controller
    Full-screen stage video (the teacher's split-screen),
    draggable teacher-cam PiP, hand raise, chat, polls,
    camera/mic sharing under teacher control.
@@ -218,6 +218,24 @@ function onEvent(type, p) {
       break;
     case "roster":
       $("#countChip").textContent = "👥 " + (p.count || 0);
+      break;
+    case "mass_broadcast":
+      enterStage();
+      // Replace stage video with the embed iframe
+      $("#stageVideo").style.display = "none";
+      let iframe = $("#massBroadcastIframe");
+      if (!iframe) {
+        iframe = document.createElement("iframe");
+        iframe.id = "massBroadcastIframe";
+        iframe.style.width = "100%";
+        iframe.style.height = "100%";
+        iframe.style.border = "none";
+        iframe.allowFullscreen = true;
+        iframe.allow = "autoplay; encrypted-media";
+        $("#stageVideo").parentNode.insertBefore(iframe, $("#stageVideo").nextSibling);
+      }
+      iframe.src = p.url;
+      toast("Joined mass broadcast livestream.", "ok");
       break;
     case "media":
       if (p.kind === "stage") { enterStage(); attachStage(p.stream); }
